@@ -123,6 +123,8 @@ class ConstraintsTable(tk.Frame):
         super().__init__(master)
         self.rows = []
         self.work_posts = list(work_posts or [])
+        self.minimized = False
+        self._saved_sash = None
         self._build_header()
         for _ in range(5):
             self.add_row()
@@ -131,18 +133,22 @@ class ConstraintsTable(tk.Frame):
     def _build_header(self):
         header = tk.Frame(self)
         header.grid(row=0, column=0, sticky="nsew")
+        self.header = header
         for i, col in enumerate(COLUMNS):
             tk.Label(header, text=col, font=("Arial", 10, "bold")).grid(
                 row=0, column=i, padx=4, pady=4, sticky="nsew"
             )
             header.grid_columnconfigure(i, weight=1)
-        # Boutons Ajouter/Supprimer à droite du titre Commentaire
+        # Boutons Ajouter/Supprimer + Minimiser à l'extrémité droite
         btn_add = tk.Button(header, text="Ajouter", command=self.add_row)
-        btn_add.grid(row=0, column=len(COLUMNS), padx=(12, 4), pady=4, sticky="e")
+        btn_add.grid(row=0, column=len(COLUMNS), padx=(8, 2), pady=4, sticky="e")
         btn_del = tk.Button(header, text="Supprimer", command=self.delete_row)
-        btn_del.grid(row=0, column=len(COLUMNS) + 1, padx=(4, 4), pady=4, sticky="e")
+        btn_del.grid(row=0, column=len(COLUMNS) + 1, padx=(2, 2), pady=4, sticky="e")
+        self.min_btn = tk.Button(header, text="−", width=2, command=self.toggle_minimize)
+        self.min_btn.grid(row=0, column=len(COLUMNS) + 2, padx=(2, 8), pady=4, sticky="e")
         header.grid_columnconfigure(len(COLUMNS), weight=0)
         header.grid_columnconfigure(len(COLUMNS) + 1, weight=0)
+        header.grid_columnconfigure(len(COLUMNS) + 2, weight=0)
 
         self.table = tk.Frame(self)
         self.table.grid(row=1, column=0, sticky="nsew")
@@ -190,8 +196,13 @@ class ConstraintsTable(tk.Frame):
         comment.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
         entries.append(comment)
 
+        # Bouton d'action (+) en fin de ligne (placeholder)
+        action_btn = tk.Button(self.table, text="+", width=3)
+        action_btn.grid(row=idx, column=5, padx=4, pady=2, sticky="e")
+        entries.append(action_btn)
+
         self.rows.append(entries)
-        for col in range(len(COLUMNS)):
+        for col in range(len(COLUMNS) + 1):
             self.table.grid_columnconfigure(col, weight=1)
 
     def delete_row(self):
@@ -231,6 +242,46 @@ class ConstraintsTable(tk.Frame):
         else:
             var.set("")
             btn.config(text="Sélectionner")
+
+    def toggle_minimize(self):
+        if not self.minimized:
+            try:
+                self.table.grid_remove()
+            except Exception:
+                pass
+            try:
+                self.min_btn.config(text="+")
+            except Exception:
+                pass
+            # Tenter de remonter la barre de séparation du paned parent
+            try:
+                paned = self.master.master  # bottom_frame -> paned
+                if hasattr(paned, "sashpos"):
+                    self._saved_sash = paned.sashpos(0)
+                    paned.update_idletasks()
+                    header_h = self.header.winfo_height() if hasattr(self, "header") else 0
+                    total_h = paned.winfo_height()
+                    new_pos = max(0, total_h - header_h - 4)
+                    paned.sashpos(0, new_pos)
+            except Exception:
+                pass
+            self.minimized = True
+        else:
+            try:
+                self.table.grid()
+            except Exception:
+                pass
+            try:
+                self.min_btn.config(text="−")
+            except Exception:
+                pass
+            try:
+                paned = self.master.master
+                if hasattr(paned, "sashpos") and self._saved_sash is not None:
+                    paned.sashpos(0, self._saved_sash)
+            except Exception:
+                pass
+            self.minimized = False
 
     # Data access ---------------------------------------------------------
     def get_rows_data(self):
