@@ -22,7 +22,7 @@ from eligibility import (
 
 
 
-APP_TITLE = "ScanTime V5.2"
+APP_TITLE = "ScanTime PDS"
 current_status_path = None
 root = None  # Main Tk window, set in __main__
 title_label = None  # Banner label shown at the top of the UI
@@ -788,7 +788,7 @@ class ShiftCountTable(tk.Frame):
         kwargs.setdefault("bg", APP_SURFACE_BG)
         super().__init__(master, **kwargs)
         self.planning_gui = planning_gui
-        self.columns = ["Initiales"] + days + ["Total"]
+        self.columns = ["Initiales", "Astreintes (mois)", "Cumul tous mois", "Lignes"]
         self.tree = ttk.Treeview(
             self,
             columns=self.columns,
@@ -798,11 +798,12 @@ class ShiftCountTable(tk.Frame):
         )
         self.tree.heading("Initiales", text="Medecin", anchor="center")
         self.tree.column("Initiales", width=80, anchor="center")
-        for d in days:
-            self.tree.heading(d, text=d, anchor="center")
-            self.tree.column(d, width=60, anchor="center")
-        self.tree.heading("Total", text="Total", anchor="center")
-        self.tree.column("Total", width=60, anchor="center")
+        self.tree.heading("Astreintes (mois)", text="Astreintes (mois)", anchor="center")
+        self.tree.column("Astreintes (mois)", width=130, anchor="center")
+        self.tree.heading("Cumul tous mois", text="Cumul tous mois", anchor="center")
+        self.tree.column("Cumul tous mois", width=130, anchor="center")
+        self.tree.heading("Lignes", text="Lignes d'astreinte", anchor="center")
+        self.tree.column("Lignes", width=180, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
         self.tree.tag_configure("highlight", background="#FFF4B5")
         self.tree.tag_configure("eligible", background="#CBE8CE")
@@ -815,7 +816,6 @@ class ShiftCountTable(tk.Frame):
         if not hasattr(self.planning_gui, 'constraints_app'):
             return
 
-        shift_map = {"MATIN": "M", "AP MIDI": "A"}
         excluded = getattr(self.planning_gui, 'excluded_from_count', set())
 
         valid_initials = set()
@@ -827,28 +827,43 @@ class ShiftCountTable(tk.Frame):
             except Exception:
                 continue
 
-        assignments = {}
-        for r, row in enumerate(self.planning_gui.table_entries):
-            for j, cell in enumerate(row):
-                if not cell or (r, j) in excluded:
-                    continue
-                try:
-                    raw_value = cell.get()
-                except Exception:
-                    raw_value = ""
-                names = extract_names_from_cell(raw_value, valid_initials)
-                if not names:
-                    continue
-                jour = days[j]
-                shift = "MATIN" if r % 2 == 0 else "AP MIDI"
-                for person in names:
-                    assignments.setdefault(person, {d: [] for d in days})[jour].append(shift)
+        def collect_counts(gui_obj):
+            excl = getattr(gui_obj, 'excluded_from_count', set())
+            counts = {}
+            lines_map = {}
+            for r, row in enumerate(gui_obj.table_entries):
+                for c, cell in enumerate(row):
+                    if not cell or (r, c) in excl:
+                        continue
+                    try:
+                        raw_value = cell.get()
+                    except Exception:
+                        raw_value = ""
+                    names = extract_names_from_cell(raw_value, valid_initials)
+                    if not names:
+                        continue
+                    post_name = work_posts[c] if c < len(work_posts) else f"Ligne {c+1}"
+                    for person in names:
+                        counts[person] = counts.get(person, 0) + 1
+                        lines_map.setdefault(person, set()).add(post_name)
+            return counts, lines_map
 
-        filtered_assignments = {
-            initial: assignments[initial]
-            for initial in assignments
-            if initial in valid_initials
-        }
+        current_counts, current_lines = collect_counts(self.planning_gui)
+
+        # Cumul sur tous les onglets/mois (si disponibles)
+        cumulative_counts = dict(current_counts)
+        cumulative_lines = {k: set(v) for k, v in current_lines.items()}
+        try:
+            for (g, _c, _s) in globals().get("tabs_data", []):
+                if g is self.planning_gui:
+                    continue
+                c_counts, c_lines = collect_counts(g)
+                for person, cnt in c_counts.items():
+                    cumulative_counts[person] = cumulative_counts.get(person, 0) + cnt
+                for person, lst in c_lines.items():
+                    cumulative_lines.setdefault(person, set()).update(lst)
+        except Exception:
+            pass
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -860,22 +875,16 @@ class ShiftCountTable(tk.Frame):
         for c_row in self.planning_gui.constraints_app.rows:
             try:
                 init = c_row[0].get().strip()
-                if init and init in filtered_assignments:
+                if init and init in valid_initials:
                     ordered_initials.append(init)
             except Exception:
                 continue
 
         for person in ordered_initials:
-            shifts_by_day = filtered_assignments[person]
-
-            row_values = [person]
-            total = 0
-            for d in days:
-                shift_list = shifts_by_day[d]
-                shift_str = ", ".join(shift_map[s] for s in shift_list)
-                row_values.append(shift_str)
-                total += len(shift_list)
-            row_values.append(total)
+            monthly = current_counts.get(person, 0)
+            cumul = cumulative_counts.get(person, monthly)
+            lines = ", ".join(sorted(cumulative_lines.get(person, set()))) if cumulative_lines.get(person) else ""
+            row_values = [person, monthly, cumul, lines]
 
             tag = "evenrow" if row_index % 2 == 0 else "oddrow"
             self.tree.insert("", "end", values=tuple(row_values), tags=(tag,))
