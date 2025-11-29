@@ -14,11 +14,8 @@ class AbsenceToggleButton(tk.Button):
 
 
 
-        # DÃ©finition des Ã©tats : vide (prÃ©sent), absence le matin, absence l'aprÃ¨s-midi, absence toute la Journée
-
-
-
-        self.states = ["", "MATIN", "AP MIDI", "Journée"]
+        # DÃ©finition des Ã©tats : prÃ©sent ou absence (journÃ©e entiÃ¨re)
+        self.states = ["", "Absence"]
 
 
 
@@ -687,15 +684,15 @@ columns = [
 
 
 
-    "Vacations/semaine",
+    "PDS/semaine",
 
 
 
-    "Postes préférées (2 max)",
+    "Lignes préférentielles",
 
 
 
-    "Postes non-assurées",
+    "Lignes non-assurées",
 
 
 
@@ -1317,7 +1314,7 @@ class Application(tk.Frame):
 
 
 
-        tk.Label(self.content_frame, text="Absences / PDS", font=("Arial", 10, "bold")).grid(row=0, column=4, columnspan=7, padx=padx, pady=pady, sticky="nsew")
+        tk.Label(self.content_frame, text="Absences", font=("Arial", 10, "bold")).grid(row=0, column=4, columnspan=7, padx=padx, pady=pady, sticky="nsew")
 
 
 
@@ -1337,7 +1334,7 @@ class Application(tk.Frame):
 
 
 
-            tk.Label(self.content_frame, text="PDS", font=("Arial", 9, "bold")).grid(row=2, column=4 + i, padx=padx, pady=pady)
+            tk.Label(self.content_frame, text="", font=("Arial", 9, "bold")).grid(row=2, column=4 + i, padx=padx, pady=pady)
 
 
 
@@ -1916,7 +1913,7 @@ class Application(tk.Frame):
 
 
 
-          4-10 Jours Lundiâ†’Dimanche (AbsenceToggle + PDS)
+          4-10 Jours Lundiâ†’Dimanche (AbsenceToggle + )
 
 
 
@@ -2084,7 +2081,7 @@ class Application(tk.Frame):
 
 
 
-            # --- 4-10) Jours (Absence + PDS) ---------------------------------
+            # --- 4-10) Jours (Absence) ---------------------------------
 
 
 
@@ -2101,42 +2098,8 @@ class Application(tk.Frame):
 
 
                 toggle = AbsenceToggleButton(day_frame, font=("Arial", 9), on_change=self._notify_change)
-
-
-
                 toggle.pack(side="left")
-
-
-
-                pds_var = tk.IntVar(master=day_frame)
-
-
-
-                pds_cb  = tk.Checkbutton(day_frame, variable=pds_var, font=("Arial", 9))
-
-
-
-                pds_cb.pack(side="left")
-
-
-
-                def _on_pds_toggle(var=pds_var, cb=pds_cb, notify=self._notify_change):
-
-
-
-                    cb.config(bg="red" if var.get() == 1 else "SystemButtonFace")
-
-
-
-                    notify()
-
-
-
-                pds_cb.config(command=_on_pds_toggle)
-
-
-
-                row_widgets.append((toggle, pds_cb, pds_var))
+                row_widgets.append(toggle)
 
 
 
@@ -4108,103 +4071,21 @@ class Application(tk.Frame):
 
 
 
-        # Cellule composite (ex: (toggle_absence, pds_checkbox, pds_var))
-
-
-
-        if isinstance(cell, tuple) and len(cell) >= 3:
-
-
-
-            toggle, pds_cb, pds_var = cell[0], cell[1], cell[2]
-
-
-
-            # absence
-
-
-
+        # Cellule AbsenceToggle seule
+        if isinstance(cell, AbsenceToggleButton):
             try:
-
-
-
-                abs_val = toggle._var.get()
-
-
-
+                abs_val = cell._var.get()
             except Exception:
-
-
-
-                try:
-
-
-
-                    abs_val = toggle.cget("text")
-
-
-
-                except Exception:
-
-
-
-                    abs_val = ""
-
-
-
-            # pds (checkbox)
-
-
-
+                abs_val = ""
             try:
-
-
-
-                pds_val = int(pds_var.get())
-
-
-
+                origin_val = cell.get_origin()
             except Exception:
-
-
-
-                pds_val = 0
-
-
-
+                origin_val = getattr(cell, "origin", "manual")
             try:
-
-
-
-                origin_val = toggle.get_origin()
-
-
-
+                log_val = cell.get_log()
             except Exception:
-
-
-
-                origin_val = getattr(toggle, "origin", "manual")
-
-
-
-            try:
-
-
-
-                log_val = toggle.get_log()
-
-
-
-            except Exception:
-
-
-
-                log_val = getattr(toggle, "log_text", "")
-
-
-
-            return ("toggle_pds", abs_val, pds_val, origin_val, log_val)
+                log_val = getattr(cell, "log_text", "")
+            return ("toggle_absence", abs_val, origin_val, log_val)
 
 
 
@@ -4320,158 +4201,33 @@ class Application(tk.Frame):
 
 
 
-        # Cellule composite (toggle absence + checkbox PDS)
-
-
-
-        if isinstance(cell, tuple) and kind == "toggle_pds":
-
-
-
-            toggle, pds_cb, pds_var = cell[0], cell[1], cell[2]
-
-
-
+        # Cellule AbsenceToggle seule
+        if isinstance(cell, AbsenceToggleButton) and kind == "toggle_absence":
             abs_val = payload[1] if len(payload) > 1 else ""
+            origin_val = payload[2] if len(payload) > 2 else None
+            log_val = payload[3] if len(payload) > 3 else None
 
-
-
-            pds_val = payload[2] if len(payload) > 2 else 0
-
-
-
-            origin_val = payload[3] if len(payload) > 3 else None
-
-
-
-            log_val = payload[4] if len(payload) > 4 else None
-
-
-
-            # Absence
-
-
-
-            if hasattr(toggle, "set_state") and callable(toggle.set_state):
-
-
-
+            try:
+                cell.set_state(abs_val)
+            except Exception:
                 try:
-
-
-
-                    toggle.set_state(abs_val)
-
-
-
+                    cell._var.set(abs_val)
+                    cell.config(text=abs_val)
                 except Exception:
-
-
-
                     pass
 
-
-
-            else:
-
-
-
-                # Fallback : on force le texte + la variable
-
-
-
-                try:
-
-
-
-                    toggle._var.set(abs_val)
-
-
-
-                except Exception:
-
-
-
-                    pass
-
-
-
-                try:
-
-
-
-                    toggle.config(text=abs_val)
-
-
-
-                except Exception:
-
-
-
-                    pass
-
-
-
-            if hasattr(toggle, "set_origin"):
-
-
-
-                try:
-
-
-
-                    toggle.set_origin(origin_val or "manual", log_text=log_val, notify=False)
-
-
-
-                except Exception:
-
-
-
-                    pass
-
-
-
-            else:
-
-
-
+            try:
+                cell.set_origin(origin_val or "manual", log_text=log_val, notify=False)
+            except Exception:
                 if origin_val is not None:
-
-
-
                     try:
-
-
-
-                        toggle.origin = origin_val
-
-
-
+                        cell.origin = origin_val
                     except Exception:
-
-
-
                         pass
-
-
-
                 if log_val is not None:
-
-
-
                     try:
-
-
-
-                        toggle.log_text = log_val
-
-
-
+                        cell.log_text = log_val
                     except Exception:
-
-
-
                         pass
 
 
@@ -4492,7 +4248,7 @@ class Application(tk.Frame):
 
 
 
-            # PDS
+            # 
 
 
 

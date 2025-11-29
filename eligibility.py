@@ -33,7 +33,7 @@ class ConstraintProfile:
             state = self.absences[day_index]
         if not state:
             return False
-        if state == "JOURNEE":
+        if state in {"JOURNEE", "ABSENCE"}:
             return True
         if is_morning and state == "MATIN":
             return True
@@ -117,10 +117,11 @@ def parse_constraint_row(row_widgets: Sequence) -> Optional[ConstraintProfile]:
                     state = toggle.cget("text")
                 except Exception:
                     state = ""
+        elif hasattr(tpl, "_var"):
             try:
-                pds_flag = bool(tpl[2].get())
+                state = tpl._var.get()
             except Exception:
-                pds_flag = False
+                state = ""
         absences.append(_normalize_absence_state(state))
         pds_flags.append(pds_flag)
 
