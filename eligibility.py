@@ -210,17 +210,14 @@ class PlanningContext:
         cached = self._post_cache.get(key)
         if cached is not None:
             return cached
-        morning_row = post_index * 2
-        afternoon_row = morning_row + 1
         total = 0
-        for r_idx in (morning_row, afternoon_row):
-            if r_idx >= len(self.table_entries):
+        for r_idx, row in enumerate(self.table_entries):
+            if post_index >= len(row):
                 continue
-            for c_idx, _cell in enumerate(self.table_entries[r_idx]):
-                if self._should_skip(r_idx, c_idx):
-                    continue
-                if initial in self.names_at(r_idx, c_idx):
-                    total += 1
+            if self._should_skip(r_idx, post_index):
+                continue
+            if initial in self.names_at(r_idx, post_index):
+                total += 1
         self._post_cache[key] = total
         return total
 
@@ -231,16 +228,17 @@ class PlanningContext:
         cached = self._slot_cache.get(key)
         if cached is not None:
             return cached
-        start = 0 if is_morning else 1
-        for r_idx in range(start, len(self.table_entries), 2):
-            if self._should_skip(r_idx, day_index):
+        row = day_index
+        if row < 0 or row >= len(self.table_entries):
+            return False
+        for c_idx, _cell in enumerate(self.table_entries[row]):
+            if self._should_skip(row, c_idx):
                 continue
-            if initial in self.names_at(r_idx, day_index):
+            if initial in self.names_at(row, c_idx):
                 self._slot_cache[key] = True
                 return True
         self._slot_cache[key] = False
         return False
-
 
 def candidate_is_available(
     profile: ConstraintProfile,
@@ -260,42 +258,21 @@ def candidate_is_available(
     if context.count_total_assignments(profile.initial) >= profile.quota_total:
         return False
 
-    if profile.is_absent(day_index, is_morning):
+    if profile.is_absent(day_index, True):
         return False
 
-    if settings.enable_repos_securite and is_morning and profile.has_pds_previous_day(day_index):
+    if settings.enable_repos_securite and profile.has_pds_previous_day(day_index):
         return False
 
     if profile.non_assured_posts and post_name in profile.non_assured_posts:
         return False
 
-    if context.already_assigned_in_timeslot(profile.initial, day_index, is_morning):
+    if context.already_assigned_in_timeslot(profile.initial, day_index, True):
         return False
 
     if settings.enable_different_post_per_day:
-        fallback_same_post = (
-            not settings.forbidden_morning_to_afternoon
-            and not settings.forbidden_afternoon_to_morning
-        )
-
-        if is_morning:
-            blocked_afternoon = settings.forbidden_morning_to_afternoon.get(post_index)
-            if blocked_afternoon is None and fallback_same_post:
-                blocked_afternoon = frozenset({post_index})
-            if blocked_afternoon:
-                for blocked_idx in blocked_afternoon:
-                    row = blocked_idx * 2 + 1
-                    if profile.initial in context.names_at(row, day_index):
-                        return False
-        else:
-            blocked_morning = settings.forbidden_afternoon_to_morning.get(post_index)
-            if blocked_morning is None and fallback_same_post:
-                blocked_morning = frozenset({post_index})
-            if blocked_morning:
-                for blocked_idx in blocked_morning:
-                    row = blocked_idx * 2
-                    if profile.initial in context.names_at(row, day_index):
-                        return False
+        if context.already_assigned_in_timeslot(profile.initial, day_index, True):
+            return False
 
     if settings.enable_max_assignments:
         limit = settings.max_assignments_per_post

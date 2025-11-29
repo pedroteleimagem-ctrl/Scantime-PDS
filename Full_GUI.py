@@ -30,7 +30,7 @@ UNDO_CONSTRAINT_TAG = "__constraint_widget__"
 
 
 def renumber_week_tabs():
-    """Ensure notebook tab labels stay contiguous: Semaine 1, 2, ..."""
+    """Ensure notebook tab labels stay contiguous: Mois 1, 2, ..."""
     nb = globals().get("notebook")
     if nb is None:
         return
@@ -40,7 +40,7 @@ def renumber_week_tabs():
         return
     for idx, tab_id in enumerate(tab_ids, start=1):
         try:
-            nb.tab(tab_id, text=f"Semaine {idx}")
+            nb.tab(tab_id, text=f"Mois {idx}")
         except Exception:
             pass
 
@@ -81,11 +81,11 @@ def update_window_caption():
 APP_FONT_FAMILY = "Segoe UI"
 APP_WINDOW_BG = "#F3F3F3"
 APP_SURFACE_BG = "#FFFFFF"
-APP_PRIMARY_COLOR = "#2B579A"
-APP_PRIMARY_DARK = "#1E4E8C"
-APP_PRIMARY_LIGHT = "#C7E0F4"
-APP_DIVIDER = "#CFD8E6"
-APP_RIBBON_BG = "#E7F0FB"
+APP_PRIMARY_COLOR = "#217346"   # vert Excel
+APP_PRIMARY_DARK = "#1A5A37"
+APP_PRIMARY_LIGHT = "#CDE8D6"
+APP_DIVIDER = "#D6E4DA"
+APP_RIBBON_BG = "#E8F1E8"
 CELL_EMPTY_BG = "#FFFFFF"
 CELL_FILLED_BG = "#E6EDF8"
 CELL_DISABLED_BG = "#DDE2EC"
@@ -341,61 +341,19 @@ if __name__ == '__main__':
 # ---------------------------------------------------------------------------
 
 
-# DÃ©finition des jours en franÃ§ais
-days = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+# DÃ©finition des jours du mois (30 jours fixes pour l'instant)
+days = [str(i) for i in range(1, 31)]
 
-# Dictionnaire des postes avec horaires et couleur par dÃ©faut
+# Dictionnaire des postes (astreintes) avec couleur par dÃ©faut
 POST_INFO = {
-    "Poste 1": {
-        "color": "#DDDDDD",
-        "shifts": {
-            "MATIN": {
-                "Lundi": "08h00-13h00",
-                "Mardi": "08h00-13h00",
-                "Mercredi": "08h00-13h00",
-                "Jeudi": "08h00-13h00",
-                "Vendredi": "08h00-13h00",
-                "Samedi": None,
-                "Dimanche": None
-            },
-            "AP MIDI": {
-                "Lundi": "13h00-18h30",
-                "Mardi": "13h00-18h30",
-                "Mercredi": "13h00-18h30",
-                "Jeudi": "13h00-18h30",
-                "Vendredi": "13h00-18h30",
-                "Samedi": None,
-                "Dimanche": None
-            }
-        }
-    },
-    "Poste 2": {
-        "color": "#DDDDDD",
-        "shifts": {
-            "MATIN": {
-                "Lundi": "08h00-13h00",
-                "Mardi": "08h00-13h00",
-                "Mercredi": "08h00-13h00",
-                "Jeudi": "08h00-13h00",
-                "Vendredi": "08h00-13h00",
-                "Samedi": None,
-                "Dimanche": None
-            },
-            "AP MIDI": {
-                "Lundi": "13h00-18h30",
-                "Mardi": "13h00-18h30",
-                "Mercredi": "13h00-18h30",
-                "Jeudi": "13h00-18h30",
-                "Vendredi": "13h00-18h30",
-                "Samedi": None,
-                "Dimanche": None
-            }
-        }
-    },
+    "Ligne 1": {"color": "#C6E0B4", "shifts": {}},
+    "Ligne 2": {"color": "#F9E199", "shifts": {}},
+    "Ligne 3": {"color": "#C5A0DD", "shifts": {}},
+    "Ligne 4": {"color": "#F4B183", "shifts": {}},
 }
 
 # Liste globale des postes, utilisÃ©e Ã©galement par Constraints.py
-work_posts = list(POST_INFO.keys()) + ["Poste 3","Poste 4", "Poste 5"]
+work_posts = list(POST_INFO.keys())
 
 
 def update_work_posts(new_posts):
@@ -501,7 +459,7 @@ def _clear_conflict_marks_for_context(ctx: dict):
 def _build_index_for_gui(g_obj):
     """
     Construit un index {norm_name: [(row, col, half, post_idx, post_name)]}
-    pour un planning donné.
+    pour un planning donn? (mode mensuel : row = jour, col = astreinte).
     """
     local_posts = getattr(g_obj, "local_work_posts", work_posts)
     index = {}
@@ -511,9 +469,6 @@ def _build_index_for_gui(g_obj):
         return index
 
     for r, row in enumerate(entries):
-        half = "MATIN" if (r % 2 == 0) else "AP MIDI"
-        post_idx = r // 2
-        post_name = local_posts[post_idx] if post_idx < len(local_posts) else ""
         for c, cell in enumerate(row):
             try:
                 raw = cell.get().strip()
@@ -521,13 +476,13 @@ def _build_index_for_gui(g_obj):
                 raw = ""
             if not raw:
                 continue
+            post_name = local_posts[c] if c < len(local_posts) else ""
             for person in _split_people_live(raw):
                 norm = _norm_name_live(person)
                 if not norm:
                     continue
-                index.setdefault(norm, []).append((r, c, half, post_idx, post_name))
+                index.setdefault(norm, []).append((r, c, "ASTREINTE", c, post_name))
     return index
-
 
 def _run_live_conflict_check():
     """Compare le planning principal avec le premier secondaire et marque les conflits en badges."""
@@ -988,9 +943,9 @@ class GUI(tk.Frame):
         super().__init__(master)
         # Vous pouvez ajuster le zoom_factor selon vos prÃ©fÃ©rences
         self.zoom_factor = 1.5  
-        self.table_entries = [[None for _ in range(len(days))] for _ in range(len(work_posts) * 2)]
-        self.table_frames = [[None for _ in range(len(days))] for _ in range(len(work_posts) * 2)]
-        self.table_labels = [[None for _ in range(len(days))] for _ in range(len(work_posts) * 2)]
+        self.table_entries = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
+        self.table_frames = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
+        self.table_labels = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
         self.post_labels = {}
         self.cell_availability = {}
         self.warned_conflicts = set()
@@ -1046,17 +1001,20 @@ class GUI(tk.Frame):
 
 
     def create_widgets(self):
-        # Polices partagÃ©es -> zoom instantanÃ© sans reconstruire
+        # Polices partag?es -> zoom instantan? sans reconstruire
         self._init_fonts()
         header_font   = self.f_header
         cell_font     = self.f_cell
-        schedule_font = self.f_sched
         pad = 1
 
+        # Permet d'?tirer les colonnes lors du redimensionnement
+        for col in range(len(work_posts) + 1):
+            self.columnconfigure(col, weight=1)
 
+        # En-t?te principale (servira d'?tiquette de mois)
         self.week_label = tk.Label(
             self,
-            text="Semaine du",
+            text="Mois",
             font=header_font,
             bg=APP_SURFACE_BG,
             fg=APP_PRIMARY_DARK,
@@ -1064,31 +1022,14 @@ class GUI(tk.Frame):
             padx=6,
             pady=4,
         )
-        self.week_label.grid(row=0, column=0, columnspan=2, padx=pad, pady=pad, sticky="nsew")
+        self.week_label.grid(row=0, column=0, padx=pad, pady=pad, sticky="nsew")
         self.week_label.bind("<Button-1>", self.edit_week_date)
 
-        # CrÃ©ation des en-tÃªtes pour les jours
-        for j, day in enumerate(days):
+        # En-t?tes des colonnes (astreintes)
+        posts_source = getattr(self, "local_work_posts", work_posts)
+        for col_idx, post in enumerate(posts_source):
+            post_color = POST_INFO.get(post, {}).get("color", "#DDDDDD")
             lbl = tk.Label(
-                self,
-                text=day,
-                font=header_font,
-                bg=APP_PRIMARY_COLOR,
-                fg="white",
-                padx=8,
-                pady=6,
-                borderwidth=0,
-            )
-            lbl.grid(row=0, column=j + 2, padx=pad, pady=pad, sticky="nsew")
-
-        current_row = 1
-        for p_index, post in enumerate(work_posts):
-            post_data = POST_INFO.get(post, {})
-            post_color = post_data.get("color", "#DDDDDD")
-            shifts_data = post_data.get("shifts", {})
-
-            # Label du poste
-            poste_lbl = tk.Label(
                 self,
                 text=post,
                 font=header_font,
@@ -1098,166 +1039,127 @@ class GUI(tk.Frame):
                 padx=8,
                 pady=6,
             )
-            poste_lbl.grid(row=current_row, column=0, rowspan=2, padx=pad, pady=pad, sticky="nsew")
+            lbl.grid(row=0, column=col_idx + 1, padx=pad, pady=pad, sticky="nsew")
+            lbl.bind("<Button-3>", lambda e, lbl=lbl: self.change_post_color(e, lbl.cget("text"), lbl))
+            lbl.bind("<Double-Button-1>", lambda e, lbl=lbl: self.edit_post_name(e, lbl.cget("text"), lbl))
+            self.post_labels[post] = lbl
 
-            poste_lbl.bind(
-                "<Button-3>",
-                lambda e, lbl=poste_lbl: self.change_post_color(e, lbl.cget("text"), lbl)
-            )
+        # Ligne d'actions (+) sous les en-t?tes
+        day_header = tk.Label(
+            self,
+            text="Jours",
+            font=header_font,
+            bg=APP_PRIMARY_COLOR,
+            fg="white",
+            padx=8,
+            pady=6,
+            borderwidth=0,
+        )
+        day_header.grid(row=1, column=0, padx=pad, pady=pad, sticky="nsew")
 
-            poste_lbl.bind(
-                "<Double-Button-1>",
-                lambda e, lbl=poste_lbl: self.edit_post_name(e, lbl.cget("text"), lbl)
-            )
-
-            matin_lbl = tk.Label(
-                self,
-                text="MATIN",
-                font=cell_font,
-                bg=post_color,
-                fg="black",
-                borderwidth=0,
-                padx=6,
-                pady=4,
-            )
-            matin_lbl.grid(row=current_row, column=1, padx=pad, pady=pad, sticky="nsew")
-            apmidi_lbl = tk.Label(
-                self,
-                text="AP MIDI",
-                font=cell_font,
-                bg=post_color,
-                fg="black",
-                borderwidth=0,
-                padx=6,
-                pady=4,
-            )
-            apmidi_lbl.grid(row=current_row + 1, column=1, padx=pad, pady=pad, sticky="nsew")
-            self.post_labels[post] = (poste_lbl, matin_lbl, apmidi_lbl)
-
-            for j, day_name in enumerate(days):
-                # CrÃ©ation des cellules pour le crÃ©neau MATIN
-                row_matin = p_index * 2
-                matin_horaire = shifts_data.get("MATIN", {}).get(day_name, "08h00-13h00")
-                if matin_horaire is None:
-                    matin_horaire = "08h00-13h00"
-                frame1 = tk.Frame(
-                    self,
-                    borderwidth=0,
-                    bg=APP_SURFACE_BG,
-                    highlightthickness=1,
-                    highlightbackground=APP_DIVIDER,
-                )
-                frame1.grid(row=current_row, column=j + 2, padx=pad, pady=pad, sticky="nsew")
-                self._bind_double_click(frame1, row_matin, j)
-                label1 = tk.Label(
-                    frame1,
-                    text=matin_horaire,
-                    font=schedule_font,
-                    fg=APP_PRIMARY_DARK,
-                    bg=APP_SURFACE_BG,
-                )
-                label1.pack(side="top", fill="x", padx=4, pady=(4, 2))
-                label1.original_bg = label1.cget("bg")
-                label1.original_fg = label1.cget("fg")
-                label1.bind("<Button-3>", lambda event, row=row_matin, col=j: self.edit_schedule_time(event, row, col))
-                entry1 = tk.Entry(
-                    frame1,
-                    font=cell_font,
-                    width=6,
-                    justify="center",
-                    relief="flat",
-                    bd=0,
-                    bg=CELL_EMPTY_BG,
-                    disabledbackground=CELL_DISABLED_BG,
-                    disabledforeground=CELL_DISABLED_TEXT,
-                )
-                entry1.pack(side="top", fill="x", padx=4, pady=(0, 4))
-                entry1.bind('<KeyRelease>', self.on_cell_key)
-                entry1.bind("<FocusIn>", self.on_cell_focus_in)
-                entry1.bind("<FocusOut>", self.on_cell_focus_out)
-                entry1.bind("<Control-Button-1>", lambda e, r=row_matin, c=j: self.on_ctrl_click(e, r, c))
-                entry1.bind("<Shift-Button-1>",   lambda e, r=row_matin, c=j: self.on_shift_click(e, r, c))
-                self._bind_double_click(entry1, row_matin, j)
-                # Modification : dÃ©finir la disponibilitÃ© selon le jour (fermÃ© pour Samedi et Dimanche)
-                if day_name in ["Samedi", "Dimanche"]:
-                    self.cell_availability[(row_matin, j)] = False
-                else:
-                    self.cell_availability[(row_matin, j)] = True
-                self.table_entries[row_matin][j] = entry1
-                self.table_frames[row_matin][j] = frame1
-                self.table_labels[row_matin][j] = label1
-                self.update_cell(row_matin, j)
-
-                # CrÃ©ation des cellules pour le crÃ©neau AP MIDI
-                row_apmidi = p_index * 2 + 1
-                apmidi_horaire = shifts_data.get("AP MIDI", {}).get(day_name, "13h00-18h30")
-                if apmidi_horaire is None:
-                    apmidi_horaire = "13h00-18h30"
-                frame2 = tk.Frame(
-                    self,
-                    borderwidth=0,
-                    bg=APP_SURFACE_BG,
-                    highlightthickness=1,
-                    highlightbackground=APP_DIVIDER,
-                )
-                frame2.grid(row=current_row + 1, column=j + 2, padx=pad, pady=pad, sticky="nsew")
-                self._bind_double_click(frame2, row_apmidi, j)
-                label2 = tk.Label(
-                    frame2,
-                    text=apmidi_horaire,
-                    font=schedule_font,
-                    fg=APP_PRIMARY_DARK,
-                    bg=APP_SURFACE_BG,
-                )
-                label2.pack(side="top", fill="x", padx=4, pady=(4, 2))
-                label2.bind("<Button-3>", lambda event, row=row_apmidi, col=j: self.edit_schedule_time(event, row, col))
-                entry2 = tk.Entry(
-                    frame2,
-                    font=cell_font,
-                    width=6,
-                    justify="center",
-                    relief="flat",
-                    bd=0,
-                    bg=CELL_EMPTY_BG,
-                    disabledbackground=CELL_DISABLED_BG,
-                    disabledforeground=CELL_DISABLED_TEXT,
-                )
-                entry2.pack(side="top", fill="x", padx=4, pady=(0, 4))
-                entry2.bind('<KeyRelease>', self.on_cell_key)
-                entry2.bind("<FocusIn>", self.on_cell_focus_in)
-                entry2.bind("<FocusOut>", self.on_cell_focus_out)
-                entry2.bind("<Control-Button-1>", lambda e, r=row_apmidi, c=j: self.on_ctrl_click(e, r, c))
-                entry2.bind("<Shift-Button-1>",   lambda e, r=row_apmidi, c=j: self.on_shift_click(e, r, c))
-
-                self._bind_double_click(entry2, row_apmidi, j)
-                if day_name in ["Samedi", "Dimanche"]:
-                    self.cell_availability[(row_apmidi, j)] = False
-                else:
-                    self.cell_availability[(row_apmidi, j)] = True
-                self.table_entries[row_apmidi][j] = entry2
-                self.table_frames[row_apmidi][j] = frame2
-                self.table_labels[row_apmidi][j] = label2
-                self.update_cell(row_apmidi, j)
-
-            # Bouton de suppression du poste courant (petite police, pas de gras)
-            del_btn = tk.Button(
+        for col_idx, post in enumerate(posts_source):
+            btn = tk.Button(
                 self,
                 text="+",
-                font=(APP_FONT_FAMILY, int(6 * self.zoom_factor)),
+                font=(APP_FONT_FAMILY, int(8 * self.zoom_factor)),
                 command=lambda p=post: self.open_post_action_dialog(p)
             )
-            del_btn.grid(
-                row=current_row,
-                column=len(days) + 2,
-                rowspan=2,
-                padx=pad,
-                pady=pad,
-                sticky="nsew"
-            )
+            btn.grid(row=1, column=col_idx + 1, padx=pad, pady=pad, sticky="nsew")
 
-            current_row += 2
-            # AJOUT â¼ : Ajuste initialement la largeur des colonnes en fonction du contenu
-            self.auto_resize_all_columns()
+        # Lignes de jours (1..30) et cellules d'affectation
+        for day_idx, day_name in enumerate(days):
+            grid_row = day_idx + 2
+            day_lbl = tk.Label(
+                self,
+                text=day_name,
+                font=cell_font,
+                bg="#0B5E27",
+                fg="white",
+                borderwidth=0,
+                padx=8,
+                pady=4,
+            )
+            day_lbl.grid(row=grid_row, column=0, padx=pad, pady=pad, sticky="nsew")
+
+            for col_idx, post in enumerate(posts_source):
+                frame = tk.Frame(
+                    self,
+                    borderwidth=0,
+                    bg=APP_SURFACE_BG,
+                    highlightthickness=1,
+                    highlightbackground=APP_DIVIDER,
+                )
+                frame.grid(row=grid_row, column=col_idx + 1, padx=pad, pady=pad, sticky="nsew")
+                self._bind_double_click(frame, day_idx, col_idx)
+
+                entry = tk.Entry(
+                    frame,
+                    font=cell_font,
+                    width=10,
+                    justify="center",
+                    relief="flat",
+                    bd=0,
+                    bg=CELL_EMPTY_BG,
+                    disabledbackground=CELL_DISABLED_BG,
+                    disabledforeground=CELL_DISABLED_TEXT,
+                )
+
+                entry.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+                entry.bind('<KeyRelease>', self.on_cell_key)
+                entry.bind("<FocusIn>", self.on_cell_focus_in)
+                entry.bind("<FocusOut>", self.on_cell_focus_out)
+                entry.bind("<Control-Button-1>", lambda e, r=day_idx, c=col_idx: self.on_ctrl_click(e, r, c))
+                entry.bind("<Shift-Button-1>",   lambda e, r=day_idx, c=col_idx: self.on_shift_click(e, r, c))
+                self._bind_double_click(entry, day_idx, col_idx)
+
+                self.cell_availability[(day_idx, col_idx)] = True
+                self.table_entries[day_idx][col_idx] = entry
+                self.table_frames[day_idx][col_idx] = frame
+                self.table_labels[day_idx][col_idx] = None
+                self.update_cell(day_idx, col_idx)
+
+        self.auto_resize_all_columns()
+
+    def undo_last_change(self):
+        """
+        Annule le dernier changement enregistré (copie/échange/saisie).
+        """
+        if not self.cell_edit_undo_stack:
+            return
+        action = self.cell_edit_undo_stack.pop()
+        if isinstance(action, tuple) and len(action) == 3:
+            actions = [action]
+        elif isinstance(action, list):
+            actions = action
+        else:
+            return
+        for row, col, old_val in actions:
+            try:
+                cell = self.table_entries[row][col]
+                if cell is None:
+                    continue
+                cell.delete(0, "end")
+                if old_val:
+                    cell.insert(0, old_val)
+            except Exception:
+                continue
+        self.schedule_update_colors()
+
+    def edit_week_date(self, event):
+        """Modifie le libellé du mois affiché en en-tête."""
+        try:
+            new_date = custom_askstring(
+                self,
+                "Mois",
+                "Entrez le mois :",
+                event.x_root,
+                event.y_root,
+                self.week_label["text"],
+            )
+            if new_date:
+                self.week_label.config(text=new_date)
+        except Exception:
+            pass
 
     # Nouveaux gestionnaires d'Ã©vÃ©nements pour le focus
     def on_cell_focus_in(self, event):
@@ -1426,41 +1328,30 @@ class GUI(tk.Frame):
 
     def auto_resize_column(self, col_idx: int):
         """
-        Ajuste la largeur minimale de la colonne (jour) en fonction :
+        Ajuste la largeur minimale de la colonne (astreinte) en fonction :
         - des contenus des Entry (noms saisis),
-        - du label d'horaire dans chaque cellule,
-        - de l'entÃªte de colonne (jour).
+        - de l'ent?te de colonne (astreinte).
         """
         try:
-            # RÃ©cupÃ¨re les polices depuis le cache (dÃ©pend du zoom)
-            f_cell, f_sched, f_head = self._get_measure_fonts()
+            f_cell, _, f_head = self._get_measure_fonts()
+            posts_source = getattr(self, "local_work_posts", work_posts)
+            header_text = posts_source[col_idx] if col_idx < len(posts_source) else ""
+            max_px = f_head.measure(header_text)
 
-            # Mesure de base sur lâentÃªte (Lundi, Mardi, ...)
-            max_px = f_head.measure(days[col_idx])
-
-            # Balaye les cellules de la colonne : label d'horaire + contenu Entry
             for i in range(len(self.table_entries)):
-                lbl = self.table_labels[i][col_idx]
-                if lbl is not None:
-                    max_px = max(max_px, f_sched.measure(lbl.cget("text") or ""))
-
                 ent = self.table_entries[i][col_idx]
                 if ent is not None:
                     max_px = max(max_px, f_cell.measure(ent.get() or ""))
 
-            # Marges + garde-fou min/max (Ã©vite colonnes infinies)
             pad = int(12 * self.zoom_factor)
             min_w = int(60 * self.zoom_factor)
             max_w = int(260 * self.zoom_factor)
             target = max(min_w, min(max_w, max_px + pad))
 
-            # La grille du planning commence Ã  la colonne 2 (0=poste, 1=matin/apmidi)
-            self.grid_columnconfigure(col_idx + 2, minsize=target)
-
-            # Petit rafraÃ®chissement local
+            # Colonne 0 = libell? des jours, on d?cale de +1 pour les astreintes
+            self.grid_columnconfigure(col_idx + 1, minsize=target)
             self.update_idletasks()
         except Exception:
-            # En cas d'objet manquant (pendant init/refresh), on ignore
             pass
 
 
@@ -1483,51 +1374,41 @@ class GUI(tk.Frame):
 
 
     def auto_resize_all_columns(self):
-        """Ajuste toutes les colonnes de jours dâun coup."""
-        for j in range(len(days)):
+        """Ajuste toutes les colonnes d'astreintes."""
+        for j in range(len(work_posts)):
             self.auto_resize_column(j)
 
     def auto_resize_all_columns_fast(self, sample_rows: int = 10):
-        """
-        Variante rapide de l'ajustement des colonnes :
-        - mesure l'en-tÃªte et seulement 'sample_rows' premiÃ¨res lignes
-        - ne force pas update_idletasks()
-        Suffisant pour le zoom ; on garde la version complÃ¨te pour les recalculs de fond.
-        """
-        for j in range(len(days)):
+        for j in range(len(work_posts)):
             try:
                 self._auto_resize_column_sampled(j, sample_rows)
             except Exception:
                 pass
 
     def _auto_resize_column_sampled(self, col_idx: int, sample_rows: int):
-        # RÃ©cupÃ¨re les polices de mesure au zoom courant
-        f_cell, f_sched, f_head = self._get_measure_fonts()
+        f_cell, _, f_head = self._get_measure_fonts()
+        posts_source = getattr(self, "local_work_posts", work_posts)
+        header_text = posts_source[col_idx] if col_idx < len(posts_source) else ""
+        max_px = f_head.measure(header_text)
 
-        # Base : en-tÃªte (Lundi, Mardi, â¦)
-        max_px = f_head.measure(days[col_idx])
-
-        # Ãchantillonner seulement les premiÃ¨res lignes visibles
         total_rows = len(self.table_entries)
         limit = min(total_rows, max(1, int(sample_rows)))
         for i in range(limit):
-            lbl = self.table_labels[i][col_idx]
-            if lbl is not None:
-                max_px = max(max_px, f_sched.measure(lbl.cget("text") or ""))
-
             ent = self.table_entries[i][col_idx]
             if ent is not None:
                 max_px = max(max_px, f_cell.measure(ent.get() or ""))
 
-        # Marges + garde-fou min/max
-        pad  = int(12 * self.zoom_factor)
+        pad = int(12 * self.zoom_factor)
         min_w = int(60 * self.zoom_factor)
         max_w = int(260 * self.zoom_factor)
         target = max(min_w, min(max_w, max_px + pad))
+        self.grid_columnconfigure(col_idx + 1, minsize=target)
 
-        # La grille planning commence Ã  la colonne 2 (0=poste, 1=matin/apmidi)
-        self.grid_columnconfigure(col_idx + 2, minsize=target)
-
+    def _bind_double_click(self, widget, row, col):
+        """
+        Lie un double-clic pour basculer la disponibilit? de la cellule (row, col).
+        """
+        widget.bind("<Double-Button-1>", lambda e, r=row, c=col: self.toggle_availability(r, c))
 
     def on_ctrl_click(self, event, row, col):
         """
@@ -1628,12 +1509,13 @@ class GUI(tk.Frame):
 
 
 
-    def get_basic_eligible_replacements(self, row_idx, day_idx):
+    def get_basic_eligible_replacements(self, row_idx, col_idx):
         """
-        Retourne la liste des initiales éligibles pour la mise en surbrillance
+        Retourne la liste des initiales ?ligibles pour la mise en surbrillance
         en appliquant toutes les contraintes individuelles connues.
+        row_idx = jour, col_idx = astreinte.
         """
-        if self.is_cell_excluded_from_count(row_idx, day_idx):
+        if self.is_cell_excluded_from_count(row_idx, col_idx):
             return []
 
         constraints_app = getattr(self, "constraints_app", None)
@@ -1664,11 +1546,11 @@ class GUI(tk.Frame):
         from Full_GUI import work_posts
         if not work_posts:
             return []
-        post_idx = row_idx // 2
+        post_idx = col_idx
         if post_idx < 0 or post_idx >= len(work_posts):
             return []
         post_name = work_posts[post_idx]
-        is_morning = (row_idx % 2 == 0)
+        is_morning = True  # unique cr?neau par jour/astreinte
 
         forbidden_morning, forbidden_afternoon = Assignation.build_forbidden_maps(work_posts)
         settings = AssignmentSettings(
@@ -1681,382 +1563,22 @@ class GUI(tk.Frame):
         )
 
         eligibles = []
-        for cand_row in rows:
-            profile = parse_constraint_row(cand_row)
+        for row in rows:
+            profile = parse_constraint_row(row)
             if not profile:
                 continue
             if candidate_is_available(
                 profile,
                 context,
-                day_index=day_idx,
+                day_index=row_idx,
                 post_index=post_idx,
                 is_morning=is_morning,
                 post_name=post_name,
                 settings=settings,
             ):
                 eligibles.append(profile.initial)
-
         return eligibles
 
-
-    def push_undo_state(self):
-        """Enregistre l'Ã©tat actuel de la table dans la pile d'annulation."""
-        current_state = [[cell.get() for cell in row] for row in self.table_entries]
-        # Ne pas enregistrer si c'est identique au dernier Ã©tat
-        if self.undo_stack and self.undo_stack[-1] == current_state:
-            return
-        self.undo_stack.append(current_state)
-        # Limiter la pile Ã  3 Ã©tats
-        if len(self.undo_stack) > 5:
-            self.undo_stack.pop(0)
-
-    def undo_last_change(self):
-        """
-        Annule la derniÃ¨re assignation en restaurant lâÃ©tat du planning tel quâil Ã©tait
-        avant le dÃ©clenchement de lâassignation. Cet undo ne concerne que les assignations,
-        et non les modifications manuelles des cellules.
-        
-        Pour que cela fonctionne, pensez Ã  sauvegarder lâÃ©tat du tableau dans self.last_assignment_state
-        juste AVANT dâappeler la fonction dâassignation.
-        """
-        import tkinter.messagebox as messagebox
-
-        if not hasattr(self, 'last_assignment_state') or self.last_assignment_state is None:
-            messagebox.showinfo("Annuler assignation", "Aucune assignation à annuler.")
-            return
-
-        # Restauration de l'Ã©tat sauvegardÃ©
-        for i, row in enumerate(self.table_entries):
-            for j, cell in enumerate(row):
-                cell.delete(0, "end")
-                cell.insert(0, self.last_assignment_state[i][j])
-        self.last_assignment_state = None  # RÃ©initialiser la sauvegarde aprÃ¨s restauration
-        self.update_colors(None)
-
-    def undo_cell_edit(self, event=None):
-        """
-        Ctrl-Z : annule la derniÃ¨re action dâÃ©dition.
-        Accepte :
-        â¢ un tuple (row, col, old_val)  -> Ã©dition simple / copie,
-        â¢ une liste [(r,c,old), (r,c,old), ...] -> swap ou opÃ©rations multiples.
-        """
-        if not self.cell_edit_undo_stack:
-            return
-
-        action = self.cell_edit_undo_stack.pop()
-        changes = action if isinstance(action, list) else [action]
-
-        cols_to_resize = set()
-        focus_cell = None
-
-        for change in changes:
-            if (
-                isinstance(change, tuple)
-                and len(change) == 3
-                and isinstance(change[0], str)
-                and change[0] == UNDO_CONSTRAINT_TAG
-            ):
-                _, widget, old_val = change
-                try:
-                    widget.delete(0, "end")
-                    if old_val:
-                        widget.insert(0, old_val)
-                except Exception:
-                    pass
-                continue
-
-            r, c, old_val = change
-            cell = self.table_entries[r][c]
-            cell.delete(0, "end")
-            if old_val:
-                cell.insert(0, old_val)
-            cols_to_resize.add(c)
-            if focus_cell is None:
-                focus_cell = cell
-
-        for c in cols_to_resize:
-            self.auto_resize_column(c)
-
-        self.update_colors(None)
-        if focus_cell is not None:
-            focus_cell.focus_set()
-
-
-    
-    def _flush_zoom(self):
-        """
-        Applique le zoom accumulÃ© SANS reconstruire l'UI :
-        - met Ã  jour uniquement les tailles des polices partagÃ©es
-        - invalide le cache de mesure
-        - lance un auto-resize RAPIDE (Ã©chantillonnÃ©) en diffÃ©rÃ©
-        """
-        self._zoom_job = None
-
-        # Rien Ã  faire si pas de changement
-        if abs(self._zoom_accum - 1.0) < 1e-6:
-            return
-
-        # Nouveau facteur bornÃ©
-        new_zoom = self.zoom_factor * self._zoom_accum
-        new_zoom = max(0.6, min(3.0, new_zoom))
-        self._zoom_accum = 1.0
-
-        if abs(new_zoom - self.zoom_factor) < 1e-6:
-            return
-
-        self.zoom_factor = new_zoom
-
-        # Invalider le cache de mesure des polices (utilisÃ© par auto_resize)
-        self._measure_fonts = None
-        self._measure_fonts_zoom = None
-
-        # Mettre Ã  jour les polices partagÃ©es (tous les widgets suivent)
-        self._init_fonts()
-
-        # Auto-resize rapide (Ã©chantillon de lignes), aprÃ¨s une courte pause
-        try:
-            if hasattr(self, "_resize_job") and self._resize_job is not None:
-                self.after_cancel(self._resize_job)
-        except Exception:
-            pass
-        self._resize_job = self.after(150, lambda: self.auto_resize_all_columns_fast(sample_rows=10))
-
-
-
-    def on_zoom(self, event):
-        """
-        Ctrl + molette : coalesce les crans de molette et dÃ©clenche
-        un redraw unique aprÃ¨s un court dÃ©lai pour un zoom fluide.
-        """
-        # Pas de zoom "symÃ©trique" (1.1 et son inverse)
-        step = 1.1 if getattr(event, "delta", 0) > 0 else (1.0 / 1.1)
-
-        # Accumule les crans (on multiplie les facteurs)
-        self._zoom_accum *= step
-
-        # (Re)programme le flush unique dans ~90 ms
-        if self._zoom_job is not None:
-            self.after_cancel(self._zoom_job)
-        self._zoom_job = self.after(90, self._flush_zoom)
-
-        # EmpÃªche d'autres handlers de traiter cet Ã©vÃ©nement
-        return "break"
-
-    def _bind_double_click(self, widget, row, col):
-        """
-        Lie un double-clic sur le widget de cellule pour basculer la disponibilitÃ©.
-        UtilisÃ© par create_widgets() pour les frames et les entries de chaque case.
-        """
-        widget.bind("<Double-Button-1>", lambda e, r=row, c=col: self.toggle_availability(r, c))
-
-    
-
-    def edit_schedule_time(self, event, row, col):
-        """
-        Pop-up pour modifier le texte du tag temporel + option d'exclusion du dÃ©compte.
-        Boutons :
-          - OK : applique au tag cliquÃ© (texte + option exclusion).
-          - Apply to all : applique Ã  tous les tags de la mÃªme ligne (mÃªme crÃ©neau).
-        """
-        current_time = self.table_labels[row][col].cget("text")
-
-        # --- Popup ---
-        popup = tk.Toplevel(self)
-        popup.title("Modifier Cellule")
-        popup.geometry(f"+{event.x_root}+{event.y_root}")
-
-        tk.Label(popup, text="Entrez le nouvel horaire :").pack(padx=10, pady=5)
-        entry = tk.Entry(popup)
-        entry.insert(0, current_time)
-        entry.pack(padx=10, pady=5)
-        entry.focus_set()
-
-        # Check : exclusion de cette case du tableau de dÃ©compte
-        exclude_var = tk.BooleanVar(value=((row, col) in getattr(self, 'excluded_from_count', set())))
-        tk.Checkbutton(
-            popup,
-            text="Ne pas compter cette case",
-            variable=exclude_var
-        ).pack(padx=10, pady=(0, 5), anchor="w")
-
-        def on_ok():
-            new_time = entry.get().strip()
-            if new_time:
-                self.table_labels[row][col].config(text=new_time)
-
-            # Maj du flag d'exclusion
-            if exclude_var.get():
-                self.excluded_from_count.add((row, col))
-            else:
-                self.excluded_from_count.discard((row, col))
-
-            # Marquage visuel du tag temporel
-            self._apply_exclusion_style(row, col, exclude_var.get())
-
-            # RafraÃ®chir le dÃ©compte
-            if hasattr(self, 'shift_count_table'):
-                self.shift_count_table.update_counts()
-
-            popup.destroy()
-
-        def on_apply_all():
-            new_time = entry.get().strip()
-            num_cols = len(self.table_labels[row])
-
-            for c in range(num_cols):
-                if new_time:
-                    self.table_labels[row][c].config(text=new_time)
-
-                if exclude_var.get():
-                    self.excluded_from_count.add((row, c))
-                else:
-                    self.excluded_from_count.discard((row, c))
-
-                # Marquage visuel pour chaque tag de la ligne
-                self._apply_exclusion_style(row, c, exclude_var.get())
-
-            if hasattr(self, 'shift_count_table'):
-                self.shift_count_table.update_counts()
-
-            popup.destroy()
-
-        # Boutons
-        btn_frame = tk.Frame(popup)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="OK", command=on_ok).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="Apply to all", command=on_apply_all).pack(side="left", padx=5)
-
-        # Modal
-        popup.transient(self)
-        popup.grab_set()
-        self.wait_window(popup)
-
-
-    def _apply_exclusion_style(self, row, col, excluded: bool):
-        """
-        Applique/retire un marquage discret (bordure fine) sur le tag temporel
-        de la cellule [row, col], pour indiquer l'exclusion du décompte.
-        """
-        lbl = self.table_labels[row][col]
-        if not lbl:
-            return
-
-        is_available = self.cell_availability.get((row, col), True)
-
-        if excluded and is_available:
-            # Bordure rouge discrète (si supportée), sinon petite bordure "solid"
-            try:
-                lbl.configure(
-                    highlightthickness=1,
-                    highlightbackground="#CC4B4B",  # rouge discret
-                    highlightcolor="#CC4B4B",
-                    bd=0,
-                    relief="flat",
-                )
-            except Exception:
-                # Fallback si highlightbackground n'est pas supporté
-                lbl.configure(bd=1, relief="solid")
-        else:
-            # On retire toute bordure ajoutée
-            try:
-                lbl.configure(highlightthickness=0, bd=0, relief="flat")
-            except Exception:
-                lbl.configure(bd=0, relief="flat")
-
-
-    def refresh_exclusion_styles(self):
-        """
-        RÃ©applique le style sur tous les tags temporels en fonction de
-        self.excluded_from_count. Ã appeler aprÃ¨s un (re)chargement si besoin.
-        """
-        excluded = getattr(self, 'excluded_from_count', set())
-        for r, row_lbls in enumerate(self.table_labels):
-            for c, _ in enumerate(row_lbls):
-                self._apply_exclusion_style(r, c, (r, c) in excluded)
-
-    
-    def is_cell_excluded_from_count(self, row, col):
-        excluded = getattr(self, 'excluded_from_count', set())
-        return (row, col) in excluded
-
-    def _collect_valid_initials(self):
-        rows = getattr(getattr(self, 'constraints_app', None), 'rows', []) or []
-        initials = set()
-        for row in rows:
-            try:
-                init = row[0].get().strip()
-            except Exception:
-                init = ''
-            if init:
-                initials.add(init)
-        return initials
-
-    def edit_week_date(self, event):
-        new_date = custom_askstring(self, "Date de la semaine", "Entrez la date de la semaine :", event.x_root, event.y_root, self.week_label["text"])
-        if new_date is not None:
-            self.week_label.config(text=new_date)
-    
-    
-    def change_post_color(self, event, post, label_widget):
-        palette = tk.Toplevel(self)
-        palette.title("Choisir une couleur pour " + post)
-        palette.geometry("+{}+{}".format(event.x_root, event.y_root))
-        colors = [
-            "#90EE90",  # Vert clair
-            "#008000",  # Vert moins foncÃ©
-            "#ADD8E6",  # Bleu clair
-            "#1E90FF",  # Bleu moins foncÃ©
-            "#FFFFE0",  # Jaune trÃ¨s clair
-            "#B8860B",  # Jaune/dorÃ© foncÃ©
-            "#D8BFD8",  # Violet clair
-            "#9400D3",  # Violet foncÃ©
-            "#FFA500",  # Orange clair
-            "#FF4500"   # Orange foncÃ©
-        ]
-        for i, color in enumerate(colors):
-            btn = tk.Button(palette, bg=color, width=4,
-                            command=lambda c=color: self.set_post_color(post, label_widget, c, palette))
-            btn.grid(row=i//5, column=i%5, padx=5, pady=5)
-    
-
-    def set_post_color(self, post, label_widget, color, palette):
-        # Met Ã  jour la couleur du widget du poste
-        label_widget.config(bg=color)
-
-        # Met Ã  jour la couleur dans POST_INFO pour le poste
-        if post in POST_INFO:
-            POST_INFO[post]["color"] = color
-        else:
-            POST_INFO[post] = {
-                "color": color,
-                "shifts": {
-                    "MATIN":  {d: "08h00-13h00"  for d in days},
-                    "AP MIDI": {d: "13h00-18h30" for d in days}
-                }
-            }
-
-        # Met Ã  jour les labels du poste (titre + crÃ©neaux) â une seule fois
-        if post in self.post_labels:
-            poste_lbl, matin_lbl, apmidi_lbl = self.post_labels[post]
-            poste_lbl.config(bg=color)
-            matin_lbl.config(bg=color)
-            apmidi_lbl.config(bg=color)
-
-        # â Mise Ã  jour de toutes les cellules (MATIN & AP MIDI) pour ce poste
-        try:
-            post_index = work_posts.index(post)
-            for row in (post_index * 2, post_index * 2 + 1):
-                for col in range(len(days)):
-                    self.update_cell(row, col)
-        except Exception as e:
-            print("Erreur lors de la mise Ã  jour des couleurs des cellules :", e)
-
-        palette.destroy()
-
-
-
-
-    
     def toggle_availability(self, row, col):
         current_state = self.cell_availability.get((row, col), True)
         new_state = not current_state
@@ -2076,56 +1598,54 @@ class GUI(tk.Frame):
 
     def close_posts(self, post_names):
         """
-        Ferme (dÃ©sactive) toutes les cellules (MATIN et AP MIDI) pour chaque poste donnÃ©.
+        Ferme (d?sactive) toutes les cellules pour chaque poste donn?.
         """
         from Full_GUI import work_posts
         for post in post_names:
             if post in work_posts:
-                idx = work_posts.index(post)
-                for row_idx in (idx * 2, idx * 2 + 1):
-                    for col in range(len(days)):
-                        self.cell_availability[(row_idx, col)] = False
-                        self.update_cell(row_idx, col)
+                col_idx = work_posts.index(post)
+                for row_idx in range(len(days)):
+                    self.cell_availability[(row_idx, col_idx)] = False
+                    self.update_cell(row_idx, col_idx)
 
-    
     def update_cell(self, row, col):
         frame = self.table_frames[row][col]
         entry = self.table_entries[row][col]
         label = self.table_labels[row][col]
-        if not frame or not entry or not label:
+        if not frame or not entry:
             return
 
-        post_index = row // 2
         posts_source = getattr(self, "local_work_posts", work_posts)
         post_info_source = getattr(self, "local_post_info", POST_INFO)
+        if col < len(posts_source):
+            post = posts_source[col]
+            post_color = post_info_source.get(post, {}).get("color", "#DDDDDD")
+        else:
+            post_color = "#DDDDDD"
+
         if self.cell_availability.get((row, col), True):
             frame.config(bg=APP_SURFACE_BG, highlightbackground=APP_DIVIDER)
-            if post_index < len(posts_source):
-                post = posts_source[post_index]
-                post_color = post_info_source.get(post, {}).get("color", "#DDDDDD")
-            else:
-                post_color = label.cget("bg")
-            label.config(bg=post_color, fg="black")
+            if label:
+                label.config(bg=post_color, fg="black")
             entry.config(state="normal", bg=CELL_EMPTY_BG, fg="black")
         else:
             frame.config(bg=CELL_DISABLED_BG, highlightbackground=CELL_DISABLED_BG)
-            label.config(bg=CELL_DISABLED_BG, fg=CELL_DISABLED_BG)
+            if label:
+                label.config(bg=CELL_DISABLED_BG, fg=CELL_DISABLED_BG)
             entry.config(
                 state="disabled",
                 disabledbackground=CELL_DISABLED_BG,
                 disabledforeground=CELL_DISABLED_BG,
             )
 
-        self._update_post_label_state(post_index)
+        self._update_post_label_state(col)
 
         if hasattr(self, "is_cell_excluded_from_count"):
             self._apply_exclusion_style(row, col, self.is_cell_excluded_from_count(row, col))
 
-    
 
-
-    def _row_fully_disabled(self, row_idx: int) -> bool:
-        for col_idx in range(len(days)):
+    def _column_fully_disabled(self, col_idx: int) -> bool:
+        for row_idx in range(len(days)):
             if self.cell_availability.get((row_idx, col_idx), True):
                 return False
         return True
@@ -2136,33 +1656,16 @@ class GUI(tk.Frame):
         if post_index < 0 or post_index >= len(posts_source):
             return
         post = posts_source[post_index]
-        labels = self.post_labels.get(post)
-        if not labels:
+        header_lbl = self.post_labels.get(post)
+        if not header_lbl:
             return
-        poste_lbl, matin_lbl, apmidi_lbl = labels
-        morning_disabled = self._row_fully_disabled(post_index * 2)
-        afternoon_disabled = self._row_fully_disabled(post_index * 2 + 1)
-        post_fully_disabled = morning_disabled and afternoon_disabled
-
         post_color = post_info_source.get(post, {}).get("color", "#DDDDDD")
         disabled_bg = CELL_DISABLED_BG
         disabled_fg = CELL_DISABLED_TEXT
-
-        if poste_lbl:
-            if post_fully_disabled:
-                poste_lbl.config(bg=disabled_bg, fg=disabled_fg)
-            else:
-                poste_lbl.config(bg=post_color, fg="black")
-        if matin_lbl:
-            if morning_disabled:
-                matin_lbl.config(bg=disabled_bg, fg=disabled_fg)
-            else:
-                matin_lbl.config(bg=post_color, fg="black")
-        if apmidi_lbl:
-            if afternoon_disabled:
-                apmidi_lbl.config(bg=disabled_bg, fg=disabled_fg)
-            else:
-                apmidi_lbl.config(bg=post_color, fg="black")
+        if self._column_fully_disabled(post_index):
+            header_lbl.config(bg=disabled_bg, fg=disabled_fg)
+        else:
+            header_lbl.config(bg=post_color, fg="black")
 
     def update_colors(self, event):
         """
@@ -2170,49 +1673,33 @@ class GUI(tk.Frame):
         and recompute incompatibilities.
         """
         assignments = {}
-
-        # 0) Reset previous incompatibilities
         self.incompatible_cells.clear()
 
-        # 1) Base coloring + assignment rebuild
         for row_idx, row in enumerate(self.table_entries):
             for col_idx, cell in enumerate(row):
                 if not cell:
                     continue
-
                 if not self.cell_availability.get((row_idx, col_idx), True):
                     self.update_cell(row_idx, col_idx)
                     continue
 
                 txt = cell.get().strip()
-
-                if txt:  # occupied cell
+                if txt:
                     cell.config(state="normal", bg=CELL_FILLED_BG, fg="black")
-                    day_name = days[col_idx]
-                    shift_name = "MATIN" if (row_idx % 2 == 0) else "AP MIDI"
-
-                    # Guardrail against temporary redraw mismatches
+                    day_name = days[row_idx] if row_idx < len(days) else str(row_idx + 1)
                     local_posts = getattr(self, "local_work_posts", work_posts)
-                    post_idx = row_idx // 2
-                    if post_idx >= len(local_posts):
-                        continue
-                    post_name = local_posts[post_idx]
-
-                    if txt not in assignments:
-                        assignments[txt] = {}
-                    if day_name not in assignments[txt]:
-                        assignments[txt][day_name] = {}
-                    if shift_name not in assignments[txt][day_name]:
-                        assignments[txt][day_name][shift_name] = []
-                    assignments[txt][day_name][shift_name].append(post_name)
-                else:  # empty cell
+                    if col_idx < len(local_posts):
+                        post_name = local_posts[col_idx]
+                        assignments.setdefault(txt, {}).setdefault(day_name, []).append(post_name)
+                else:
                     cell.config(state="normal", bg=CELL_EMPTY_BG, fg="black")
 
-        # 2) Update shift count table
         if hasattr(self, 'shift_count_table'):
-            self.shift_count_table.update_counts()
+            try:
+                self.shift_count_table.update_counts()
+            except Exception:
+                pass
 
-        # 3) Re-evaluate incompatibilities
         for i, row in enumerate(self.table_entries):
             for j, cell in enumerate(row):
                 if not self.cell_availability.get((i, j), True):
@@ -2220,13 +1707,10 @@ class GUI(tk.Frame):
                 if cell.get().strip():
                     self.check_incompatibility(i, j)
 
-        # 4) Optional verification highlighting
         if getattr(self, 'verification_enabled', None) and self.verification_enabled.get():
             self.highlight_conflicts()
 
-        # 5) Force UI refresh
         self.update_idletasks()
-
 
 
     # === Marquage visuel des conflits inter-plannings (badge â rouge) ===
@@ -2584,86 +2068,63 @@ class GUI(tk.Frame):
         }
 
     def duplicate_work_post(self, post_name: str) -> str | None:
-        """Crée une copie du poste et l'insère juste en dessous."""
+        """Cr?e une copie du poste et l'ins?re juste ? c?t?."""
         from tkinter import messagebox
-
         global work_posts, POST_INFO
 
         if post_name not in work_posts:
-            messagebox.showerror("Duplication impossible", f"Le poste \"{post_name}\" est introuvable.")
+            messagebox.showerror("Duplication impossible", f'Le poste "{post_name}" est introuvable.')
             return None
 
         post_index = work_posts.index(post_name)
         new_post_name = self._generate_duplicate_name(post_name)
-
-        gui_instances = get_all_gui_instances() or [self]
-
-        payloads = {}
-        for gui_instance in gui_instances:
-            payloads[gui_instance] = gui_instance._build_post_duplication_payload(post_index, True)
-
-        color_source = POST_INFO.get(post_name, {}).get('color')
-        if not color_source:
-            labels_tuple = self.post_labels.get(post_name)
-            if labels_tuple and labels_tuple[0]:
-                color_source = labels_tuple[0].cget('bg')
-        if not color_source:
-            color_source = '#DDDDDD'
-
-        base_payload = payloads.get(self)
-        shift_periods = ['MATIN', 'AP MIDI']
-        new_shifts: dict[str, dict[str, str | None]] = {}
-        availability_rows = base_payload['availability'] if base_payload else []
-        label_rows = base_payload['labels'] if base_payload else []
-        for offset, period in enumerate(shift_periods):
-            day_map: dict[str, str | None] = {}
-            availability_row = availability_rows[offset] if offset < len(availability_rows) else []
-            label_row = label_rows[offset] if offset < len(label_rows) else []
-            for day_idx, day_name in enumerate(days):
-                is_available = availability_row[day_idx] if day_idx < len(availability_row) else True
-                label_info = label_row[day_idx] if day_idx < len(label_row) else None
-                if not is_available:
-                    day_map[day_name] = None
-                elif label_info is not None:
-                    day_map[day_name] = label_info[0]
-                else:
-                    day_map[day_name] = ''
-            new_shifts[period] = day_map
-
-        POST_INFO[new_post_name] = {
-            'color': color_source,
-            'shifts': new_shifts,
-        }
+        color_source = POST_INFO.get(post_name, {}).get('color') or '#DDDDDD'
 
         work_posts.insert(post_index + 1, new_post_name)
+        POST_INFO[new_post_name] = {'color': color_source, 'shifts': {}}
         update_work_posts(work_posts)
 
-        if Assignation.FORBIDDEN_POST_ASSOCIATIONS:
-            replicated = set()
-            if (post_name, post_name) in Assignation.FORBIDDEN_POST_ASSOCIATIONS:
-                replicated.add((new_post_name, new_post_name))
-            if replicated:
-                Assignation.FORBIDDEN_POST_ASSOCIATIONS.update(replicated)
-
+        gui_instances = get_all_gui_instances() or [self]
         for gui_instance in gui_instances:
-            payload = payloads.get(gui_instance)
-            if not payload:
-                continue
-            gui_instance._last_inserted_post = {
-                'index': payload['index'],
-                'entries': [list(row) for row in payload['entries']],
-                'labels': [list(row) for row in payload['labels']],
-                'availability': [list(row) for row in payload['availability']],
-                'excluded': [set(cols) for cols in payload['excluded']],
-            }
+            gui_instance.redraw_widgets(preserve_content=True)
+            try:
+                for row_idx in range(len(gui_instance.table_entries)):
+                    src = gui_instance.table_entries[row_idx][post_index]
+                    dst = gui_instance.table_entries[row_idx][post_index + 1]
+                    if src and dst:
+                        dst.delete(0, "end")
+                        dst.insert(0, src.get())
+                        gui_instance.cell_availability[(row_idx, post_index + 1)] = gui_instance.cell_availability.get((row_idx, post_index), True)
+            except Exception:
+                pass
+            gui_instance.refresh_delete_post_combo()
+            if hasattr(gui_instance, 'constraints_app'):
+                gui_instance.constraints_app.refresh_available_posts()
+            gui_instance.schedule_update_colors()
+        return new_post_name
+
+    def delete_work_post_specific(self, post_name):
+        """
+        Supprime le poste de travail donn? et rafra?chit l'interface.
+        """
+        from Full_GUI import work_posts, update_work_posts, POST_INFO
+
+        if post_name not in work_posts:
+            return
+
+        idx = work_posts.index(post_name)
+        work_posts.pop(idx)
+        update_work_posts(work_posts)
+        if post_name in POST_INFO:
+            del POST_INFO[post_name]
+
+        gui_instances = get_all_gui_instances() or [self]
+        for gui_instance in gui_instances:
             gui_instance.redraw_widgets(preserve_content=True)
             gui_instance.refresh_delete_post_combo()
             if hasattr(gui_instance, 'constraints_app'):
                 gui_instance.constraints_app.refresh_available_posts()
-            if hasattr(gui_instance, 'shift_count_table'):
-                gui_instance.shift_count_table.update_counts()
             gui_instance.schedule_update_colors()
-        return new_post_name
 
     def open_post_action_dialog(self, post_name: str) -> None:
         """Affiche une fenêtre pour supprimer ou dupliquer un poste."""
@@ -2739,34 +2200,6 @@ class GUI(tk.Frame):
         popup.focus_set()
         popup.wait_window()
 
-    def delete_work_post_specific(self, post_name):
-        """
-        Supprime le poste de travail donnÃ©, en conservant le planning,
-        et mÃ©morise lâindex pour ajuster ensuite le contenu sauvegardÃ©.
-        """
-        from Full_GUI import work_posts, update_work_posts, POST_INFO
-
-        if post_name not in work_posts:
-            return
-
-        idx = work_posts.index(post_name)
-        gui_instances = get_all_gui_instances() or [self]
-
-        work_posts.pop(idx)
-        update_work_posts(work_posts)
-        if post_name in POST_INFO:
-            del POST_INFO[post_name]
-
-        for gui_instance in gui_instances:
-            gui_instance._last_deleted_post_index = idx
-            gui_instance.redraw_widgets(preserve_content=True)
-            gui_instance.refresh_delete_post_combo()
-            if hasattr(gui_instance, 'constraints_app'):
-                gui_instance.constraints_app.refresh_available_posts()
-            if hasattr(gui_instance, 'shift_count_table'):
-                gui_instance.shift_count_table.update_counts()
-            gui_instance.schedule_update_colors()
-
     def confirm_delete_work_post(self, post_name):
         """
         Affiche une boÃ®te de dialogue de confirmation avant
@@ -2781,6 +2214,32 @@ class GUI(tk.Frame):
             self.delete_work_post_specific(post_name)
 
 
+
+    def change_post_color(self, event, post_name, label_widget=None):
+        """
+        Ouvre un sélecteur de couleur et applique la couleur à la colonne.
+        """
+        try:
+            import tkinter.colorchooser as cc
+        except Exception:
+            return
+        try:
+            _rgb, hex_color = cc.askcolor(parent=self, title=f"Couleur pour {post_name}")
+        except Exception:
+            return
+        if not hex_color:
+            return
+        POST_INFO.setdefault(post_name, {})["color"] = hex_color
+        target_label = label_widget or self.post_labels.get(post_name)
+        if target_label:
+            try:
+                target_label.config(bg=hex_color, fg="black")
+            except Exception:
+                pass
+        if post_name in work_posts:
+            col_idx = work_posts.index(post_name)
+            for row_idx in range(len(self.table_entries)):
+                self.update_cell(row_idx, col_idx)
 
     def edit_post_name(self, event, old_name, label_widget):
         """
@@ -2878,198 +2337,48 @@ class GUI(tk.Frame):
 
     
     def redraw_widgets(self, preserve_content=False):
-        # --- 1) Sauvegarde de lâÃ©tat actuel si on prÃ©serve le contenu ---
         saved_data = None
         saved_availability = None
-        saved_labels = None
-        saved_excluded = set(getattr(self, "excluded_from_count", set()))
-        if not preserve_content:
-            saved_excluded = set()
+        saved_excluded = set(getattr(self, "excluded_from_count", set())) if preserve_content else set()
+
         if preserve_content:
-            # Contenu des cellules
             saved_data = [
                 [cell.get() if cell is not None else "" for cell in row]
                 for row in self.table_entries
             ]
-            # DisponibilitÃ© des cellules
-            saved_availability = self.cell_availability.copy()
-            # PropriÃ©tÃ©s des labels horaires
-            saved_labels = [
-                [(label.cget("text"), label.cget("bg"), label.cget("fg"))
-                 for label in row]
-                for row in self.table_labels
-            ]
+            saved_availability = dict(self.cell_availability)
+        else:
+            saved_excluded = set()
 
-            # Si un poste vient d'Ãªtre supprimÃ©, on ajuste saved_data et saved_availability
-            if hasattr(self, '_last_deleted_post_index'):
-                idx = self._last_deleted_post_index
-                row_start = idx * 2
-                # 1) Supprimer les deux lignes de saved_data
-                if saved_data:
-                    del saved_data[row_start:row_start + 2]
-                # 2) RÃ©ajuster les indices de saved_availability
-                adjusted = {}
-                for (r, c), avail in saved_availability.items():
-                    if r < row_start:
-                        new_r = r
-                    elif r >= row_start + 2:
-                        new_r = r - 2
-                    else:
-                        # ces lignes ont Ã©tÃ© supprimÃ©es
-                        continue
-                    adjusted[(new_r, c)] = avail
-                saved_availability = adjusted
-
-                filtered_excluded = set()
-                for (r, c) in saved_excluded:
-                    if r < row_start:
-                        new_r = r
-                    elif r >= row_start + 2:
-                        new_r = r - 2
-                    else:
-                        continue
-                    filtered_excluded.add((new_r, c))
-                saved_excluded = filtered_excluded
-
-                # Plus besoin de cet attribut
-                del self._last_deleted_post_index
-
-            inserted = getattr(self, '_last_inserted_post', None) if preserve_content else None
-            if inserted is not None and preserve_content:
-                row_start = max(0, int(inserted.get('index', 0))) * 2
-                num_cols = len(days)
-
-                if saved_data is None:
-                    saved_data = []
-                while len(saved_data) < row_start:
-                    saved_data.append(['' for _ in range(num_cols)])
-
-                entries_to_insert = []
-                insertion_entries = inserted.get('entries', [])
-                for offset in range(2):
-                    if offset < len(insertion_entries):
-                        row = list(insertion_entries[offset])
-                        if len(row) < num_cols:
-                            row.extend(['' for _ in range(num_cols - len(row))])
-                    else:
-                        row = ['' for _ in range(num_cols)]
-                    entries_to_insert.append(row)
-                saved_data[row_start:row_start] = entries_to_insert
-
-                if saved_labels is None:
-                    saved_labels = []
-                while len(saved_labels) < row_start:
-                    saved_labels.append([None for _ in range(num_cols)])
-
-                labels_to_insert = []
-                insertion_labels = inserted.get('labels', [])
-                for offset in range(2):
-                    if offset < len(insertion_labels):
-                        label_row = []
-                        for lbl in insertion_labels[offset]:
-                            label_row.append(tuple(lbl) if isinstance(lbl, (list, tuple)) else None)
-                        if len(label_row) < num_cols:
-                            label_row.extend([None for _ in range(num_cols - len(label_row))])
-                    else:
-                        label_row = [None for _ in range(num_cols)]
-                    labels_to_insert.append(label_row)
-                saved_labels[row_start:row_start] = labels_to_insert
-
-                if saved_availability is None:
-                    saved_availability = {}
-                adjusted_availability = {}
-                for (r, c), avail in saved_availability.items():
-                    if r < row_start:
-                        adjusted_availability[(r, c)] = avail
-                    else:
-                        adjusted_availability[(r + 2, c)] = avail
-
-                insertion_availability = inserted.get('availability', [])
-                for offset in range(2):
-                    if offset < len(insertion_availability):
-                        avail_row = list(insertion_availability[offset])
-                        if len(avail_row) < num_cols:
-                            avail_row.extend([True for _ in range(num_cols - len(avail_row))])
-                    else:
-                        avail_row = [True for _ in range(num_cols)]
-                    for col_idx, avail in enumerate(avail_row):
-                        adjusted_availability[(row_start + offset, col_idx)] = bool(avail)
-                saved_availability = adjusted_availability
-
-                adjusted_excluded = set()
-                for (r, c) in saved_excluded:
-                    if r < row_start:
-                        adjusted_excluded.add((r, c))
-                    else:
-                        adjusted_excluded.add((r + 2, c))
-
-                insertion_excluded = inserted.get('excluded', [])
-                for offset in range(2):
-                    if offset < len(insertion_excluded):
-                        for col_idx in insertion_excluded[offset]:
-                            adjusted_excluded.add((row_start + offset, col_idx))
-                saved_excluded = adjusted_excluded
-
-                del self._last_inserted_post
-
-        # --- 2) Destruction de tous les widgets existants ---
         for widget in self.winfo_children():
             widget.destroy()
 
-        # --- 3) RÃ©initialisation des grilles internes ---
-        self.table_entries = [
-            [None for _ in range(len(days))]
-            for _ in range(len(work_posts) * 2)
-        ]
-        self.table_frames = [
-            [None for _ in range(len(days))]
-            for _ in range(len(work_posts) * 2)
-        ]
-        self.table_labels = [
-            [None for _ in range(len(days))]
-            for _ in range(len(work_posts) * 2)
-        ]
+        self.table_entries = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
+        self.table_frames = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
+        self.table_labels = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
         self.post_labels = {}
-        self.excluded_from_count = set()
         if not preserve_content:
             self.cell_availability = {}
 
-        # --- 4) Reconstruction de lâinterface ---
         self.create_widgets()
 
-        # RÃ©appliquer la couleur & lâindisponibilitÃ© pour **toutes** les cellules
-        for row in range(len(self.table_entries)):
-            for col in range(len(days)):
-                self.update_cell(row, col)
-
-
-        # --- 5) RÃ©injection du contenu sauvegardÃ© ---
         if preserve_content and saved_data:
             for i in range(min(len(saved_data), len(self.table_entries))):
                 for j in range(min(len(saved_data[i]), len(self.table_entries[i]))):
                     cell = self.table_entries[i][j]
                     if cell:
-                        cell.insert(0, saved_data[i][j])
+                        try:
+                            cell.insert(0, saved_data[i][j])
+                        except Exception:
+                            pass
 
-        # --- 6) RÃ©injection de la disponibilitÃ© (fusion et filtrage) ---
         if preserve_content and saved_availability:
             max_rows = len(self.table_entries)
             max_cols = len(self.table_entries[0]) if self.table_entries else 0
             for (r, c), avail in saved_availability.items():
                 if 0 <= r < max_rows and 0 <= c < max_cols:
                     self.cell_availability[(r, c)] = avail
-            for (r, c), avail in saved_availability.items():
-                if 0 <= r < max_rows and 0 <= c < max_cols:
                     self.update_cell(r, c)
-
-        # --- 7) RÃ©injection des propriÃ©tÃ©s des labels horaires ---
-        if preserve_content and saved_labels:
-            for i in range(min(len(saved_labels), len(self.table_labels))):
-                for j in range(min(len(saved_labels[i]), len(self.table_labels[i]))):
-                    lbl = self.table_labels[i][j]
-                    if lbl and saved_labels[i][j] is not None:
-                        text, bg, fg = saved_labels[i][j]
-                        lbl.config(text=text, bg=bg, fg=fg)
 
         max_rows = len(self.table_entries)
         max_cols = len(self.table_entries[0]) if self.table_entries else 0
@@ -3080,28 +2389,25 @@ class GUI(tk.Frame):
             self.excluded_from_count = set()
         self.refresh_exclusion_styles()
 
-        # --- 8) RÃ©application globale des couleurs aprÃ¨s reconstruction ---
         for r in range(len(self.table_entries)):
-            for c in range(len(days)):
+            for c in range(len(work_posts)):
                 self.update_cell(r, c)
-        # Recolorer les cellules remplies et marquer les conflits
         self.update_colors(None)
         self.auto_resize_all_columns()
 
+
     def check_incompatibility(self, row_idx, col_idx):
         """
-        Colore en rouge la cellule (row_idx, col_idx) lorsquâelle viole une
-        contrainteâ¯: absence, repos de sÃ©curitÃ©, poste nonâassurÃ©, double crÃ©neau,
-        quota dÃ©passÃ©, etc.
+        Colore en rouge la cellule (row_idx, col_idx) lorsqu?elle viole une
+        contrainte : absence, poste non-assur?, double affectation le m?me jour,
+        quota d?pass?.
         """
-        # Skip if no constraints table is attached (e.g., in secondary window)
         if getattr(self, "constraints_app", None) is None:
             return False
-        cell     = self.table_entries[row_idx][col_idx]
-        initial  = cell.get().strip()
+        cell = self.table_entries[row_idx][col_idx]
+        initial = cell.get().strip()
         parser_valids = self._collect_valid_initials() or None
 
-        # Cas 0â¯: cellule vidÃ©e â on retire lâincompatibilitÃ© Ã©ventuelle
         if not initial:
             self.incompatible_cells.discard((row_idx, col_idx))
             cell.config(bg="white")
@@ -3115,31 +2421,23 @@ class GUI(tk.Frame):
         current_names = extract_names_from_cell(initial, parser_valids) or [initial]
         current_name_set = set(current_names)
 
-
-        # Contexte du crÃ©neau
-        is_morning = (row_idx % 2 == 0)
-        day_idx    = col_idx
-        post_idx   = row_idx // 2
+        day_idx = row_idx
+        post_idx = col_idx
         from Full_GUI import work_posts
-        post_name  = work_posts[post_idx] if post_idx < len(work_posts) else None
+        post_name = work_posts[post_idx] if post_idx < len(work_posts) else None
 
-        # 1) RÃ©cupÃ©ration de la ligne Â«â¯Contraintesâ¯Â» du candidat
-        cand_row = next((r for r in self.constraints_app.rows
-                        if r[0].get().strip() == initial), None)
+        cand_row = next((r for r in self.constraints_app.rows if r[0].get().strip() == initial), None)
         if cand_row is None:
-            # Initiales non reconnues â on rÃ©initialise la couleur
             cell.config(bg="white")
             self.incompatible_cells.discard((row_idx, col_idx))
             return
 
-        # 2) --- DÃ©passement du quota hebdomadaire ------------------------------
         try:
             quota_total = int(cand_row[1].get().strip())
         except Exception:
             quota_total = None
 
         if quota_total is not None:
-            # Comptage de toutes les affectations actuelles pour cette personne
             total_assignments = 0
             for r_idx, row_entries in enumerate(self.table_entries):
                 for c_idx, other_cell in enumerate(row_entries):
@@ -3162,113 +2460,47 @@ class GUI(tk.Frame):
                 self.incompatible_cells.add((row_idx, col_idx))
                 return
 
-        # 3) --- Absence dÃ©clarÃ©e le jour concernÃ© ------------------------------
         try:
-            tpl   = cand_row[4 + day_idx]
+            tpl = cand_row[4 + day_idx]
             state_raw = tpl[0]._var.get() if isinstance(tpl, tuple) else ""
         except Exception:
             state_raw = ""
         state = (state_raw or "").strip().upper()
         state_ascii = unicodedata.normalize("NFKD", state).encode("ASCII", "ignore").decode() if state else state
-
-        if ((is_morning and state_ascii in {"MATIN", "JOURNEE"}) or
-            (not is_morning and state_ascii in {"AP MIDI", "JOURNEE"})):
+        if state_ascii in {"MATIN", "AP MIDI", "APMIDI", "JOURNEE"}:
             cell.config(bg="red")
             self.incompatible_cells.add((row_idx, col_idx))
             return
 
-        # 4) --- Repos de sÃ©curitÃ© (optionnel) ----------------------------------
-        from Assignation import ENABLE_REPOS_SECURITE
-        if ENABLE_REPOS_SECURITE and is_morning and day_idx > 0:
-            try:
-                prev_tpl = cand_row[4 + day_idx - 1]
-                if isinstance(prev_tpl, tuple) and len(prev_tpl) >= 3 and prev_tpl[2].get() == 1:
-                    cell.config(bg="red")
-                    self.incompatible_cells.add((row_idx, col_idx))
-                    return
-            except Exception:
-                pass
-
-        # 5) --- Poste nonâassurÃ© ----------------------------------------------
         try:
             nas = cand_row[3]._var.get() or cand_row[3].cget("text")
         except Exception:
             nas = ""
-        if post_name in [p.strip() for p in nas.split(",") if p.strip()]:
+        if post_name in [p.strip() for p in str(nas).split(",") if p.strip()]:
             cell.config(bg="red")
             self.incompatible_cells.add((row_idx, col_idx))
             return
 
-        # 6) --- MÃªme personne sur MATIN & APMIDI (optionnel) -------------------
         if Assignation.ENABLE_DIFFERENT_POST_PER_DAY:
-            forbidden_morning, forbidden_afternoon = Assignation.build_forbidden_maps(work_posts)
-            fallback_same = not forbidden_morning and not forbidden_afternoon
+            for other_col in range(len(self.table_entries[0])):
+                if other_col == col_idx:
+                    continue
+                other_cell = self.table_entries[row_idx][other_col]
+                if not other_cell or self.is_cell_excluded_from_count(row_idx, other_col):
+                    continue
+                other_raw = (other_cell.get() or "").strip()
+                if not other_raw:
+                    continue
+                other_names = extract_names_from_cell(other_raw, parser_valids) or [other_raw]
+                if any(name in current_name_set for name in other_names):
+                    cell.config(bg="red")
+                    self.incompatible_cells.add((row_idx, col_idx))
+                    return
 
-            if is_morning:
-                blocked_after = forbidden_morning.get(post_idx)
-                if blocked_after is None and fallback_same:
-                    blocked_after = {post_idx}
-                if blocked_after:
-                    for blocked_idx in blocked_after:
-                        row_to_check = blocked_idx * 2 + 1
-                        afternoon_cell = (
-                            self.table_entries[row_to_check][day_idx]
-                            if row_to_check < len(self.table_entries) else None
-                        )
-                        if afternoon_cell and not self.is_cell_excluded_from_count(row_to_check, day_idx):
-                            afternoon_raw = (afternoon_cell.get() or "").strip()
-                            if afternoon_raw:
-                                afternoon_names = extract_names_from_cell(afternoon_raw, parser_valids) or [afternoon_raw]
-                                if any(name in current_name_set for name in afternoon_names):
-                                    cell.config(bg="red")
-                                    self.incompatible_cells.add((row_idx, col_idx))
-                                    return
-            else:
-                blocked_morning = forbidden_afternoon.get(post_idx)
-                if blocked_morning is None and fallback_same:
-                    blocked_morning = {post_idx}
-                if blocked_morning:
-                    for blocked_idx in blocked_morning:
-                        row_to_check = blocked_idx * 2
-                        morning_cell = (
-                            self.table_entries[row_to_check][day_idx]
-                            if row_to_check < len(self.table_entries) else None
-                        )
-                        if morning_cell and not self.is_cell_excluded_from_count(row_to_check, day_idx):
-                            morning_raw = (morning_cell.get() or "").strip()
-                            if morning_raw:
-                                morning_names = extract_names_from_cell(morning_raw, parser_valids) or [morning_raw]
-                                if any(name in current_name_set for name in morning_names):
-                                    cell.config(bg="red")
-                                    self.incompatible_cells.add((row_idx, col_idx))
-                                    return
-
-        # 7) --- Double créneau dans la même demi-journée -----------------------
-        start = 0 if is_morning else 1
-        for r in range(start, len(self.table_entries), 2):
-            if r == row_idx:
-                continue
-            other_cell = self.table_entries[r][day_idx]
-            if not other_cell or self.is_cell_excluded_from_count(r, day_idx):
-                continue
-            other_raw = (other_cell.get() or "").strip()
-            if not other_raw:
-                continue
-            other_names = extract_names_from_cell(other_raw, parser_valids) or [other_raw]
-            if any(name in current_name_set for name in other_names):
-                cell.config(bg="red")
-                self.incompatible_cells.add((row_idx, col_idx))
-                return
-
-        # 8) --- Tout va bien ----------------------------------------------------
         cell.config(bg=CELL_FILLED_BG, fg="black")
         self.incompatible_cells.discard((row_idx, col_idx))
 
 
-
-        
- 
-# Fonctions de sauvegarde et de chargement
 
 def save_status(file_path=None, *, update_caption=True):
     """
@@ -3795,9 +3027,9 @@ def load_status(file_path: str | None = None):
         limitation_enabled_var.set(Assignation.ENABLE_MAX_ASSIGNMENTS)
         repos_securite_var.set(Assignation.ENABLE_REPOS_SECURITE)
 
-        # --- NOUVEAU : prÃ©parer un hÃ©ritage des exclusions de la Semaine 1 ---
+        # --- NOUVEAU : prÃ©parer un hÃ©ritage des exclusions de la Mois 1 ---
         # Si les semaines >1 n'ont pas d'exclusions enregistrÃ©es, on leur appliquera
-        # celles de la Semaine 1 pour rester cohÃ©rent avec l'affichage que tu avais.
+        # celles de la Mois 1 pour rester cohÃ©rent avec l'affichage que tu avais.
         first_week_excluded = None
         try:
             if all_week_status and len(all_week_status[0]) >= 6:
@@ -3836,7 +3068,7 @@ def load_status(file_path: str | None = None):
                  week_label_text) = week_status
                 excluded_cells = []  # pas d'exclusions dans les anciens fichiers
 
-            # --- NOUVEAU : hÃ©ritage depuis Semaine 1 si vide pour cette semaine
+            # --- NOUVEAU : hÃ©ritage depuis Mois 1 si vide pour cette semaine
             if idx > 0 and (not excluded_cells) and first_week_excluded:
                 excluded_cells = list(first_week_excluded)
             # -----------------------------------------------------------------
@@ -3845,7 +3077,7 @@ def load_status(file_path: str | None = None):
             frame_for_week.pack(fill="both", expand=True)
             g, c, s = create_single_week(frame_for_week)
             tabs_data.append((g, c, s))
-            notebook.add(frame_for_week, text=f"Semaine {idx+1}")
+            notebook.add(frame_for_week, text=f"Mois {idx+1}")
 
             # Planning principal
             for i in range(min(len(table_data), len(g.table_entries))):
@@ -4773,7 +4005,7 @@ if __name__ == '__main__':
                         resume_live_conflict_check()
 
                 tabs_data2.append((g_new, c_new, s_new))
-                notebook2.add(frame, text=week_label_text or f"Semaine {idx+1}")
+                notebook2.add(frame, text=week_label_text or f"Mois {idx+1}")
 
                 for i in range(min(len(table_data), len(g_new.table_entries))):
                     for j in range(min(len(table_data[i]), len(g_new.table_entries[i]))):
@@ -4804,7 +4036,7 @@ if __name__ == '__main__':
                                 continue
                             lbl.config(text=text, bg=bg, fg=fg)
 
-                g_new.week_label.config(text=week_label_text or f"Semaine {idx+1}")
+                g_new.week_label.config(text=week_label_text or f"Mois {idx+1}")
                 g_new.update_colors(None)
                 g_new.auto_resize_all_columns()
 
@@ -4903,10 +4135,10 @@ if __name__ == '__main__':
                 for idx, tab_id in enumerate(notebook.tabs(), start=1):
                     label = notebook.tab(tab_id, "text")
                     if not label:
-                        label = f"Semaine {idx}"
+                        label = f"Mois {idx}"
                     tab_labels.append((idx - 1, f"{idx} - {label}"))
             except Exception:
-                tab_labels = [(idx - 1, f"Semaine {idx}") for idx in range(1, week_count + 1)]
+                tab_labels = [(idx - 1, f"Mois {idx}") for idx in range(1, week_count + 1)]
 
             def prompt_week_selection(options):
                 dialog = tk.Toplevel(root)
@@ -5064,7 +4296,7 @@ if __name__ == '__main__':
         frame_for_week.pack(fill="both", expand=True)
         new_gui, new_constraints, new_shift_table = create_single_week(frame_for_week)
 
-        # Copie la position du sÃ©parateur (sash) de la Semaine 1
+        # Copie la position du sÃ©parateur (sash) du Mois 1
         try:
             base_sash = None
             if tabs_data and hasattr(tabs_data[0][0], "paned"):
@@ -5208,7 +4440,7 @@ if __name__ == '__main__':
 
         # Ajoute lâonglet + sÃ©lection
         tabs_data.append((new_gui, new_constraints, new_shift_table))
-        notebook.add(frame_for_week, text=f"Semaine {i}")
+        notebook.add(frame_for_week, text=f"Mois {i}")
         notebook.select(len(tabs_data) - 1)
         renumber_week_tabs()
 
@@ -5298,7 +4530,7 @@ if __name__ == '__main__':
     g, c, s = create_single_week(frame_for_week)
     tabs_data.append((g, c, s))
 
-    notebook.add(frame_for_week, text="Semaine 1")
+    notebook.add(frame_for_week, text="Mois 1")
 
     main_window_ctx = {
         "root": root,
@@ -5342,7 +4574,7 @@ if __name__ == '__main__':
 
     btn_add_week = ttk.Button(
         week_buttons_frame,
-        text="Ajouter semaine",
+        text="Ajouter mois",
         command=add_new_week,
         style=RIBBON_BUTTON_STYLE,
     )
@@ -5350,7 +4582,7 @@ if __name__ == '__main__':
 
     btn_remove_week = ttk.Button(
         week_buttons_frame,
-        text="Supprimer semaine",
+        text="Supprimer mois",
         command=remove_current_week,
         style=RIBBON_BUTTON_STYLE,
     )
@@ -5364,5 +4596,3 @@ if __name__ == '__main__':
     
     # Lancement de la boucle principale
     root.mainloop()
-
-
