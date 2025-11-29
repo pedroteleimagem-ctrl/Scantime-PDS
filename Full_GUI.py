@@ -7,7 +7,7 @@ import pickle
 import unicodedata
 import Assignation
 from Assignation import assigner_initiales
-from Constraints import MultiSelectPopup
+from ConstraintsV2 import ConstraintsTable
 from Export import (
     export_to_excel as export_to_excel_external,
     export_combined_to_excel as export_combined_to_excel_external
@@ -3372,7 +3372,6 @@ if __name__ == '__main__':
     import tkinter as tk
     from tkinter import ttk, messagebox, filedialog
     import Assignation
-    from Constraints import Application as ConstraintsApplication
     from Assignation import assigner_initiales
     from tkinter import simpledialog
 
@@ -3852,11 +3851,11 @@ if __name__ == '__main__':
         # --- On recrÃ©e la partie Contraintes ---
         constraints_app_local = None
         if include_constraints:
-            constraints_app_local = ConstraintsApplication(bottom_frame)
+            constraints_app_local = ConstraintsTable(bottom_frame, work_posts=work_posts)
             constraints_app_local.grid(row=0, column=0, sticky="nsew")
             bottom_frame.grid_rowconfigure(0, weight=1)
             bottom_frame.grid_columnconfigure(0, weight=1)
-            constraints_app_local.set_change_callback(gui_local.schedule_update_colors)
+            constraints_app_local.set_change_callback = lambda cb=None: None
             gui_local.constraints_app = constraints_app_local
         else:
             gui_local.constraints_app = None

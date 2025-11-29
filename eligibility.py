@@ -64,26 +64,22 @@ def parse_constraint_row(row_widgets: Sequence) -> Optional[ConstraintProfile]:
     if not initial:
         return None
 
-    # Quota (column 1)
-    try:
-        raw_quota = str(row_widgets[1].get()).strip()
-        quota_total = int(raw_quota) if raw_quota else None
-    except Exception:
-        quota_total = None
+    # Pas de quota dans la nouvelle table (col 1 = préférences)
+    quota_total = None
 
-    # Preferred posts button (column 2)
+    # Preferred posts button (column 1)
     try:
-        preferred_text = row_widgets[2].cget("text")
+        preferred_text = row_widgets[1].cget("text")
     except Exception:
         preferred_text = ""
     preferred_posts: List[str] = []
     if preferred_text and preferred_text.strip().lower() != "selectionner":
         preferred_posts = _split_csv(preferred_text)
 
-    # Non-assured posts (column 3)
+    # Non-assured posts (column 2)
     non_assured_text = ""
     try:
-        widget = row_widgets[3]
+        widget = row_widgets[2]
         var = getattr(widget, "_var", None)
         if var is not None:
             non_assured_text = var.get()
@@ -91,39 +87,21 @@ def parse_constraint_row(row_widgets: Sequence) -> Optional[ConstraintProfile]:
             raise AttributeError
     except Exception:
         try:
-            non_assured_text = row_widgets[3].cget("text")
+            non_assured_text = row_widgets[2].cget("text")
         except Exception:
             non_assured_text = ""
     non_assured_posts = _split_csv(non_assured_text)
 
-    absences: List[str] = []
+    # Absences (column 3) as CSV of days
+    absences_raw = ""
+    try:
+        btn = row_widgets[3]
+        absences_raw = getattr(btn, "var", None).get() if hasattr(btn, "var") else btn.cget("text")
+    except Exception:
+        absences_raw = ""
+    # pds_flags not used in V2
+    absences: List[str] = _split_csv(absences_raw)
     pds_flags: List[bool] = []
-    for offset in range(7):
-        try:
-            tpl = row_widgets[4 + offset]
-        except Exception:
-            absences.append("")
-            pds_flags.append(False)
-            continue
-
-        state = ""
-        pds_flag = False
-        if isinstance(tpl, tuple) and tpl:
-            toggle = tpl[0]
-            try:
-                state = toggle._var.get()
-            except Exception:
-                try:
-                    state = toggle.cget("text")
-                except Exception:
-                    state = ""
-        elif hasattr(tpl, "_var"):
-            try:
-                state = tpl._var.get()
-            except Exception:
-                state = ""
-        absences.append(_normalize_absence_state(state))
-        pds_flags.append(pds_flag)
 
     if preferred_posts and non_assured_posts:
         blocked = {p.lower() for p in non_assured_posts}
