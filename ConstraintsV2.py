@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 # Colonnes du tableau de contraintes (mode mensuel)
 COLUMNS = [
     "Initiales",
+    "Participation (%)",
     "Lignes préférentielles",
     "Lignes non assurées",
     "Absences (jours du mois)",
@@ -163,20 +164,37 @@ class ConstraintsTable(tk.Frame):
         init_entry.grid(row=idx, column=0, padx=4, pady=2, sticky="ew")
         entries.append(init_entry)
 
+        # Participation (%)
+        part_var = tk.StringVar(value="100")
+        part_spin = tk.Spinbox(
+            self.table,
+            from_=0,
+            to=100,
+            increment=5,
+            width=6,
+            textvariable=part_var,
+            justify="center",
+        )
+        part_spin.grid(row=idx, column=1, padx=4, pady=2, sticky="ew")
+        part_spin.bind("<MouseWheel>", lambda e, v=part_var: self._on_part_wheel(e, v))
+        part_spin.bind("<Button-4>", lambda e, v=part_var: self._on_part_wheel(e, v, 1))
+        part_spin.bind("<Button-5>", lambda e, v=part_var: self._on_part_wheel(e, v, -1))
+        entries.append(part_spin)
+
         # Lignes préférentielles
         pref_btn = tk.Button(
             self.table,
             text="Sélectionner",
             font=("Arial", 9),
         )
-        pref_btn.grid(row=idx, column=1, padx=4, pady=2, sticky="ew")
+        pref_btn.grid(row=idx, column=2, padx=4, pady=2, sticky="ew")
         pref_btn._var = tk.StringVar(value="")
         pref_btn.config(command=lambda b=pref_btn: self._open_pref_popup(b))
         entries.append(pref_btn)
 
         # Lignes non assurées
         non_btn = CheckListButton(self.table, values=self.work_posts, font=("Arial", 9))
-        non_btn.grid(row=idx, column=2, padx=4, pady=2, sticky="ew")
+        non_btn.grid(row=idx, column=3, padx=4, pady=2, sticky="ew")
         entries.append(non_btn)
 
         # Absences bouton + var
@@ -187,18 +205,18 @@ class ConstraintsTable(tk.Frame):
             font=("Arial", 9),
             command=lambda v=abs_var, b=None: self._open_days_popup(v, abs_btn),
         )
-        abs_btn.grid(row=idx, column=3, padx=4, pady=2, sticky="ew")
+        abs_btn.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
         abs_btn.var = abs_var
         entries.append(abs_btn)
 
         # Commentaire
         comment = tk.Entry(self.table, width=20)
-        comment.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
+        comment.grid(row=idx, column=5, padx=4, pady=2, sticky="ew")
         entries.append(comment)
 
         # Bouton d'action (+) en fin de ligne (placeholder)
         action_btn = tk.Button(self.table, text="+", width=3)
-        action_btn.grid(row=idx, column=5, padx=4, pady=2, sticky="e")
+        action_btn.grid(row=idx, column=6, padx=4, pady=2, sticky="e")
         entries.append(action_btn)
 
         self.rows.append(entries)
@@ -242,6 +260,26 @@ class ConstraintsTable(tk.Frame):
         else:
             var.set("")
             btn.config(text="Sélectionner")
+
+    def _on_part_wheel(self, event, var: tk.StringVar, delta_override=None):
+        """Scroll facile par pas de 5% (0..100)."""
+        try:
+            cur = int(float(var.get()))
+        except Exception:
+            cur = 0
+        delta_raw = delta_override if delta_override is not None else event.delta
+        if delta_raw == 0:
+            return "break"
+        step = 5 * (1 if delta_raw > 0 else -1)
+        new_val = max(0, min(100, cur + step))
+        # arrondi au multiple de 5 le plus proche
+        new_val = int(round(new_val / 5) * 5)
+        new_val = max(0, min(100, new_val))
+        try:
+            var.set(str(new_val))
+        except Exception:
+            pass
+        return "break"
 
     def toggle_minimize(self):
         if not self.minimized:
@@ -292,15 +330,20 @@ class ConstraintsTable(tk.Frame):
                 initials = row[0].get().strip()
             except Exception:
                 initials = ""
-            pref = getattr(row[1], "_var", tk.StringVar(value="")).get()
-            non = getattr(row[2], "_var", tk.StringVar(value="")).get() if hasattr(row[2], "_var") else ""
-            abs_days = getattr(row[3], "var", tk.StringVar(value="")).get()
             try:
-                comment = row[4].get().strip()
+                part_val = row[1].get().strip()
+            except Exception:
+                part_val = ""
+            pref = getattr(row[2], "_var", tk.StringVar(value="")).get()
+            non = getattr(row[3], "_var", tk.StringVar(value="")).get() if hasattr(row[3], "_var") else ""
+            abs_days = getattr(row[4], "var", tk.StringVar(value="")).get()
+            try:
+                comment = row[5].get().strip()
             except Exception:
                 comment = ""
             data.append({
                 "initiales": initials,
+                "participation": part_val or "100",
                 "preferences": pref,
                 "non_assurees": non,
                 "absences": abs_days,
@@ -317,22 +360,27 @@ class ConstraintsTable(tk.Frame):
             self.add_row()
             row = self.rows[-1]
             row[0].insert(0, row_dict.get("initiales", ""))
-            row[1]._var.set(row_dict.get("preferences", ""))
-            row[1].config(text=row[1]._var.get() or "Sélectionner")
-            if hasattr(row[2], "_var"):
-                row[2]._var.set(row_dict.get("non_assurees", ""))
-                row[2].config(text=row[2]._var.get() or "Sélectionner")
-            row[3].var.set(row_dict.get("absences", ""))
-            row[3].config(text=row[3].var.get() or "Sélectionner")
-            row[4].insert(0, row_dict.get("commentaire", ""))
+            try:
+                row[1].delete(0, "end")
+                row[1].insert(0, row_dict.get("participation", "100"))
+            except Exception:
+                pass
+            row[2]._var.set(row_dict.get("preferences", ""))
+            row[2].config(text=row[2]._var.get() or "Sélectionner")
+            if hasattr(row[3], "_var"):
+                row[3]._var.set(row_dict.get("non_assurees", ""))
+                row[3].config(text=row[3]._var.get() or "Sélectionner")
+            row[4].var.set(row_dict.get("absences", ""))
+            row[4].config(text=row[4].var.get() or "Sélectionner")
+            row[5].insert(0, row_dict.get("commentaire", ""))
 
     def refresh_work_posts(self, new_posts):
         """Met à jour la liste des postes utilisable pour préf/non assurées."""
         self.work_posts = list(new_posts or [])
         for row in self.rows:
-            # row[2] est le CheckListButton
+            # row[3] est le CheckListButton
             try:
-                row[2].update_values(self.work_posts)
+                row[3].update_values(self.work_posts)
             except Exception:
                 pass
 
