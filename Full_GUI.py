@@ -1,10 +1,12 @@
-import tkinter as tk
+﻿import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkinter import font as tkfont
 import os
 import re
 import pickle
 import unicodedata
+import calendar
+from datetime import date
 import Assignation
 from Assignation import assigner_initiales
 from ConstraintsV2 import ConstraintsTable
@@ -90,6 +92,9 @@ CELL_EMPTY_BG = "#FFFFFF"
 CELL_FILLED_BG = "#E6EDF8"
 CELL_DISABLED_BG = "#DDE2EC"
 CELL_DISABLED_TEXT = "#6B778D"
+DAY_LABEL_BG = "#0B5E27"
+WEEKEND_DAY_BG = "#FFE9D9"
+WEEKEND_CELL_BG = "#FFF6F2"
 SHIFT_EVEN_ROW_BG = "#FFFFFF"
 SHIFT_ODD_ROW_BG = "#F4F6FA"
 RIBBON_FRAME_STYLE = "Ribbon.TFrame"
@@ -100,6 +105,10 @@ NOTEBOOK_STYLE = "Office.TNotebook"
 NOTEBOOK_TAB_STYLE = "Office.TNotebook.Tab"
 SHIFT_TREE_STYLE = "ShiftCount.Treeview"
 SHIFT_TREE_HEADING_STYLE = "ShiftCount.Treeview.Heading"
+MONTH_NAMES_FR = [
+    "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Decembre",
+]
 
 def setup_modern_styles(root: tk.Tk) -> ttk.Style:
     style = ttk.Style(root)
@@ -341,8 +350,8 @@ if __name__ == '__main__':
 # ---------------------------------------------------------------------------
 
 
-# DÃ©finition des jours du mois (30 jours fixes pour l'instant)
-days = [str(i) for i in range(1, 31)]
+# Definition des jours du mois (31 jours max pour couvrir tous les mois)
+days = [str(i) for i in range(1, 32)]
 
 # Dictionnaire des postes (astreintes) avec couleur par dÃ©faut
 POST_INFO = {
@@ -631,6 +640,99 @@ def custom_askstring(parent, title, prompt, x, y, initial=""):
     ok_btn.pack(pady=10)
     dialog.wait_window()
     return result[0] if result else None
+
+
+class MonthPickerDialog(tk.Toplevel):
+    """Petit sélecteur de mois/année avec grille de calendrier."""
+    def __init__(self, parent, initial_date=None):
+        super().__init__(parent)
+        self.title("Choisir un mois")
+        self.configure(bg=APP_WINDOW_BG)
+        self.resizable(False, False)
+        self.result = None
+
+        base_date = initial_date or date.today()
+        self.month_var = tk.IntVar(value=base_date.month)
+        self.year_var = tk.IntVar(value=base_date.year)
+        self._title_var = tk.StringVar()
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        nav = ttk.Frame(self, padding=10, style=RIBBON_FRAME_STYLE)
+        nav.pack(fill="x")
+        ttk.Button(nav, text="<", width=4, command=lambda: self._shift_month(-1), style=RIBBON_BUTTON_STYLE).pack(side="left")
+        ttk.Label(nav, textvariable=self._title_var, anchor="center").pack(side="left", expand=True, fill="x", padx=6)
+        ttk.Button(nav, text=">", width=4, command=lambda: self._shift_month(1), style=RIBBON_BUTTON_STYLE).pack(side="right")
+
+        self.calendar_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
+        self.calendar_frame.pack(fill="both", expand=True)
+
+        btns = ttk.Frame(self, padding=(10, 0, 10, 10))
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Valider", command=self._confirm, style=RIBBON_BUTTON_STYLE).pack(side="right", padx=(0, 6))
+        ttk.Button(btns, text="Annuler", command=self._on_cancel, style=RIBBON_BUTTON_STYLE).pack(side="right")
+
+        self._build_calendar()
+        self.wait_window(self)
+
+    def _update_title(self):
+        try:
+            month_label = MONTH_NAMES_FR[self.month_var.get() - 1]
+        except Exception:
+            month_label = f"Mois {self.month_var.get()}"
+        self._title_var.set(f"{month_label} {self.year_var.get()}")
+
+    def _shift_month(self, delta):
+        month = self.month_var.get() + delta
+        year = self.year_var.get()
+        if month < 1:
+            month = 12
+            year -= 1
+        elif month > 12:
+            month = 1
+            year += 1
+        self.month_var.set(month)
+        self.year_var.set(year)
+        self._build_calendar()
+
+    def _build_calendar(self):
+        for child in self.calendar_frame.winfo_children():
+            child.destroy()
+
+        self._update_title()
+        day_names = ["L", "M", "M", "J", "V", "S", "D"]
+        for idx, name in enumerate(day_names):
+            ttk.Label(self.calendar_frame, text=name, width=3, anchor="center").grid(row=0, column=idx, padx=2, pady=2)
+
+        cal = calendar.Calendar(firstweekday=0)
+        for row_idx, week in enumerate(cal.monthdayscalendar(self.year_var.get(), self.month_var.get()), start=1):
+            for col_idx, day in enumerate(week):
+                if day == 0:
+                    ttk.Label(self.calendar_frame, text="", width=3).grid(row=row_idx, column=col_idx, padx=2, pady=2)
+                else:
+                    btn = ttk.Button(self.calendar_frame, text=str(day), width=3, command=lambda d=day: self._select_day(d), style=RIBBON_BUTTON_STYLE)
+                    btn.grid(row=row_idx, column=col_idx, padx=2, pady=2)
+
+    def _select_day(self, day):
+        try:
+            self.result = date(self.year_var.get(), self.month_var.get(), day)
+        except Exception:
+            self.result = None
+        self.destroy()
+
+    def _confirm(self):
+        """Valide le mois affiché sans choisir un jour précis (prend le 1er)."""
+        try:
+            self.result = date(self.year_var.get(), self.month_var.get(), 1)
+        except Exception:
+            self.result = None
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
 
 # Zone scrollable pour le tableau
 # Zone scrollable pour le tableau
@@ -961,6 +1063,12 @@ class GUI(tk.Frame):
         self._update_job = None  # dÃ©bounce pour update_colors
         self.week_label = None
 
+        self.day_labels = []
+        today = date.today()
+        self.current_year = today.year
+        self.current_month = today.month
+        self.weekend_rows = set()
+
         self._zoom_job = None
         self._zoom_accum = 1.0
 
@@ -1082,13 +1190,14 @@ class GUI(tk.Frame):
                 self,
                 text=day_name,
                 font=cell_font,
-                bg="#0B5E27",
+                bg=DAY_LABEL_BG,
                 fg="white",
                 borderwidth=0,
                 padx=8,
                 pady=4,
             )
             day_lbl.grid(row=grid_row, column=0, padx=pad, pady=pad, sticky="nsew")
+            self.day_labels.append(day_lbl)
 
             for col_idx, post in enumerate(posts_source):
                 frame = tk.Frame(
@@ -1593,7 +1702,78 @@ class GUI(tk.Frame):
         new_state = not current_state
         self.cell_availability[(row, col)] = new_state
         self.update_cell(row, col)
-    
+
+    def choose_month(self):
+        """Ouvre un calendrier pour choisir mois/année, puis met à jour l'en-tête + jours."""
+        parent = self.winfo_toplevel()
+        try:
+            initial = date(self.current_year, self.current_month, 1)
+        except Exception:
+            initial = date.today()
+        picker = MonthPickerDialog(parent, initial_date=initial)
+        selected_date = getattr(picker, "result", None)
+        if selected_date:
+            self.apply_month_selection(selected_date.year, selected_date.month)
+
+    def apply_month_selection(self, year: int, month: int):
+        self.current_year = year
+        self.current_month = month
+        start_day, days_in_month = self._first_full_week_start(year, month)
+        if 1 <= month <= 12:
+            label_text = f"{MONTH_NAMES_FR[month - 1]} {year}"
+        else:
+            label_text = f"Mois {month} {year}"
+        try:
+            self.week_label.config(text=label_text)
+        except Exception:
+            pass
+
+        day_numbers = list(range(start_day, days_in_month + 1))
+        while len(day_numbers) < len(self.day_labels):
+            day_numbers.append("")
+
+        weekend_rows = set()
+        for idx, day_value in enumerate(day_numbers):
+            if day_value == "":
+                continue
+            try:
+                if date(year, month, int(day_value)).weekday() >= 5:
+                    weekend_rows.add(idx)
+            except Exception:
+                continue
+
+        self.weekend_rows = weekend_rows
+
+        for idx, (lbl, day_value) in enumerate(zip(self.day_labels, day_numbers)):
+            try:
+                if day_value == "":
+                    lbl.config(text="", bg=DAY_LABEL_BG, fg="white")
+                else:
+                    is_weekend = idx in weekend_rows
+                    lbl.config(
+                        text=str(day_value),
+                        bg=WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG,
+                        fg="black" if is_weekend else "white",
+                    )
+            except Exception:
+                continue
+
+        for r, row in enumerate(self.table_entries):
+            for c, _ in enumerate(row):
+                try:
+                    self.update_cell(r, c)
+                except Exception:
+                    continue
+        self.schedule_update_colors()
+
+    @staticmethod
+    def _first_full_week_start(year: int, month: int) -> tuple[int, int]:
+        first_weekday, days_in_month = calendar.monthrange(year, month)
+        start_day = 1 + ((7 - first_weekday) % 7)
+        if start_day > days_in_month:
+            start_day = max(1, days_in_month - 6)
+        return start_day, days_in_month
+
     def select_and_close_posts(self):
         """
         Ouvre un popup pour Sélectionner plusieurs postes puis ferme (rend indisponibles)
@@ -1624,6 +1804,10 @@ class GUI(tk.Frame):
         if not frame or not entry:
             return
 
+        is_weekend = row in getattr(self, "weekend_rows", set())
+        base_bg = WEEKEND_CELL_BG if is_weekend else APP_SURFACE_BG
+        empty_bg = WEEKEND_CELL_BG if is_weekend else CELL_EMPTY_BG
+
         posts_source = getattr(self, "local_work_posts", work_posts)
         post_info_source = getattr(self, "local_post_info", POST_INFO)
         if col < len(posts_source):
@@ -1633,10 +1817,10 @@ class GUI(tk.Frame):
             post_color = "#DDDDDD"
 
         if self.cell_availability.get((row, col), True):
-            frame.config(bg=APP_SURFACE_BG, highlightbackground=APP_DIVIDER)
+            frame.config(bg=base_bg, highlightbackground=APP_DIVIDER)
             if label:
                 label.config(bg=post_color, fg="black")
-            entry.config(state="normal", bg=CELL_EMPTY_BG, fg="black")
+            entry.config(state="normal", bg=empty_bg, fg="black")
         else:
             frame.config(bg=CELL_DISABLED_BG, highlightbackground=CELL_DISABLED_BG)
             if label:
@@ -1683,6 +1867,7 @@ class GUI(tk.Frame):
         """
         assignments = {}
         self.incompatible_cells.clear()
+        weekend_rows = getattr(self, "weekend_rows", set())
 
         for row_idx, row in enumerate(self.table_entries):
             for col_idx, cell in enumerate(row):
@@ -1693,6 +1878,7 @@ class GUI(tk.Frame):
                     continue
 
                 txt = cell.get().strip()
+                empty_bg = WEEKEND_CELL_BG if row_idx in weekend_rows else CELL_EMPTY_BG
                 if txt:
                     cell.config(state="normal", bg=CELL_FILLED_BG, fg="black")
                     day_name = days[row_idx] if row_idx < len(days) else str(row_idx + 1)
@@ -1701,7 +1887,7 @@ class GUI(tk.Frame):
                         post_name = local_posts[col_idx]
                         assignments.setdefault(txt, {}).setdefault(day_name, []).append(post_name)
                 else:
-                    cell.config(state="normal", bg=CELL_EMPTY_BG, fg="black")
+                    cell.config(state="normal", bg=empty_bg, fg="black")
 
         if hasattr(self, 'shift_count_table'):
             try:
@@ -3775,13 +3961,13 @@ if __name__ == '__main__':
             )
             undo_btn.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
 
-            close_posts_btn = ttk.Button(
+            choose_month_btn = ttk.Button(
                 action_box,
-                text="Fermer postes",
-                command=gui_local.select_and_close_posts,
+                text="Choisir mois",
+                command=gui_local.choose_month,
                 style=RIBBON_BUTTON_STYLE,
             )
-            close_posts_btn.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
+            choose_month_btn.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
 
             clear_btn = ttk.Button(
                 action_box,
