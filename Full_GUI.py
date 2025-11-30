@@ -3034,7 +3034,13 @@ def save_status(file_path=None, *, update_caption=True):
                         note = getattr(toggle, "log_text", "")
                     row_values.append((toggle._var.get(), pds_var.get(), origin, note))
                 elif isinstance(widget, tk.Button):
-                    row_values.append(widget.cget("text"))
+                    # Boutons avec variable associée (préférences / absences)
+                    if hasattr(widget, "var"):
+                        row_values.append(widget.var.get())
+                    elif hasattr(widget, "_var"):
+                        row_values.append(widget._var.get())
+                    else:
+                        row_values.append(widget.cget("text"))
                 elif hasattr(widget, "_var"):
                     row_values.append(widget._var.get())
                 else:
@@ -3680,7 +3686,13 @@ def load_status(file_path: str | None = None):
                         if getattr(widget, "_is_row_action_button", False):
                             widget.config(text="+")
                         else:
-                            widget.config(text=value)
+                            # Restaure aussi la variable sous-jacente si elle existe (préférences/absences)
+                            val_str = "" if value in (None, "Sélectionner") else str(value)
+                            if hasattr(widget, "var"):
+                                widget.var.set(val_str)
+                            if hasattr(widget, "_var"):
+                                widget._var.set(val_str)
+                            widget.config(text=val_str or "Sélectionner")
                     else:
                         widget.delete(0, "end")
                         widget.insert(0, value)
@@ -4305,10 +4317,20 @@ if __name__ == '__main__':
             clear_btn.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
 
             def trigger_assignation():
-                gui_local.last_assignment_state = [
-                    [cell.get() for cell in row]
-                    for row in gui_local.table_entries
-                ]
+                # Snapshot before running auto-assign so the undo button can restore it.
+                before_state = []
+                for row in gui_local.table_entries:
+                    row_snapshot = []
+                    for cell in row:
+                        if cell is None:
+                            row_snapshot.append(None)
+                            continue
+                        try:
+                            row_snapshot.append(cell.get())
+                        except Exception:
+                            row_snapshot.append("")
+                    before_state.append(row_snapshot)
+                gui_local.last_assignment_state = before_state
                 current_y = getattr(gui_local, "current_year", None)
                 current_m = getattr(gui_local, "current_month", None)
                 assigner_initiales(constraints_app_local, gui_local)
@@ -4324,6 +4346,31 @@ if __name__ == '__main__':
                         gui_local.shift_count_table.update_counts()
                     except Exception:
                         pass
+                # Push the diff to the undo stack so "Annuler assignation" works.
+                try:
+                    changes = []
+                    for r_idx, row in enumerate(gui_local.table_entries):
+                        if r_idx >= len(before_state):
+                            break
+                        before_row = before_state[r_idx]
+                        for c_idx, cell in enumerate(row):
+                            if c_idx >= len(before_row):
+                                break
+                            if cell is None:
+                                continue
+                            try:
+                                new_val = cell.get()
+                            except Exception:
+                                continue
+                            old_val = before_row[c_idx]
+                            if old_val is None:
+                                old_val = ""
+                            if new_val != old_val:
+                                changes.append((r_idx, c_idx, old_val))
+                    if changes:
+                        gui_local.cell_edit_undo_stack.append(changes)
+                except Exception:
+                    pass
 
             assign_btn = ttk.Button(
                 action_box,

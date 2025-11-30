@@ -75,7 +75,7 @@ def assigner_initiales(constraints_app, planning_gui):
     days_in_month = calendar.monthrange(year, month)[1]
 
     def _split_csv(text):
-        return [p.strip() for p in str(text or "").split(",") if p.strip()]
+        return [p.strip() for p in str(text or "").replace(";", ",").split(",") if p.strip()]
 
     def _holidays_for(m_year, m_month):
         if _month_holidays:
@@ -147,6 +147,12 @@ def assigner_initiales(constraints_app, planning_gui):
         absences = set()
         for part_item in _split_csv(abs_txt):
             try:
+                if "-" in part_item:
+                    start, end = part_item.split("-", 1)
+                    start_i, end_i = int(start), int(end)
+                    if start_i <= end_i:
+                        absences.update(range(start_i, end_i + 1))
+                        continue
                 num = int(part_item)
                 absences.add(num)
             except Exception:
@@ -271,28 +277,36 @@ def assigner_initiales(constraints_app, planning_gui):
     def _assign_slots(slots, target_map, count_map):
         for (r_idx, c_idx, day_num, dtype) in slots:
             post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
-            eligible = []
+            candidates = []  # (profile, weight)
             for p in profiles:
                 if not _is_available(p, r_idx, day_num, c_idx, post_name):
                     continue
-                eligible.append(p)
-            if not eligible:
-                continue
-
-            weights = []
-            for p in eligible:
                 cur = count_map[p["initial"]]
                 tgt = target_map.get(p["initial"], 0.0)
-                weights.append(max(1e-6, tgt - cur))
+                deficit = tgt - cur
+                base_w = deficit if deficit > 0 else 0.05  # petite pénalité quand au-dessus de la cible
+                if post_name and post_name in p["preferred"]:
+                    base_w *= 1.35  # bonus de préférence mais limité pour garder l'équilibre
+                candidates.append((p, base_w, deficit))
+
+            if not candidates:
+                continue
+
+            # Si quelqu'un a un déficit positif, filtrer pour prioriser ceux encore sous cible.
+            under_target = [(p, w, d) for (p, w, d) in candidates if d > 0]
+            if under_target:
+                candidates = under_target
+
+            weights = [max(1e-6, w) for (_, w, _) in candidates]
 
             total_w = sum(weights)
             if total_w <= 0:
-                chosen = random.choice(eligible)
+                chosen = random.choice([p for p, _, _ in candidates])
             else:
                 pick = random.random() * total_w
                 acc = 0.0
-                chosen = eligible[-1]
-                for p, w in zip(eligible, weights):
+                chosen = candidates[-1][0]
+                for (p, _, _), w in zip(candidates, weights):
                     acc += w
                     if pick <= acc:
                         chosen = p
