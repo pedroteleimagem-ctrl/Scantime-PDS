@@ -6,6 +6,7 @@ import re
 import pickle
 import unicodedata
 import calendar
+import locale
 from datetime import date
 import Assignation
 from Assignation import assigner_initiales
@@ -109,6 +110,44 @@ MONTH_NAMES_FR = [
     "Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin",
     "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Decembre",
 ]
+HOLIDAY_DAY_BG = "#FFD65C"
+HOLIDAY_CELL_BG = "#FFF3D6"
+
+try:
+    import holidays as _holidays_lib
+except Exception:
+    _holidays_lib = None
+
+
+def _default_holiday_country():
+    """Essaie de déduire un code pays (ISO) via la locale système."""
+    try:
+        loc = locale.getdefaultlocale()[0] or ""
+    except Exception:
+        loc = ""
+    if loc and "_" in loc:
+        return loc.split("_", 1)[1].upper()
+    return (loc or "FR").upper() or "FR"
+
+
+HOLIDAY_COUNTRY = _default_holiday_country()
+
+
+def month_holidays(year: int, month: int) -> set[date]:
+    """
+    Retourne l'ensemble des dates fériées pour un mois donné.
+    Utilise la bibliothèque 'holidays' si disponible, sinon renvoie un set vide.
+    """
+    if _holidays_lib is None:
+        return set()
+    try:
+        hol = _holidays_lib.CountryHoliday(HOLIDAY_COUNTRY, years=[year])
+    except Exception:
+        return set()
+    try:
+        return {d for d in hol if d.year == year and d.month == month}
+    except Exception:
+        return set()
 
 def setup_modern_styles(root: tk.Tk) -> ttk.Style:
     style = ttk.Style(root)
@@ -680,10 +719,15 @@ class MonthPickerDialog(tk.Toplevel):
         self.wait_window(self)
 
     def _center_over_widget(self, widget):
-        """Centre le popup sur le widget donné (ou l'écran en secours)."""
+        """Centre le popup sur le toplevel du widget (prend en compte multi-écrans)."""
         try:
             self.update_idletasks()
-            target = widget or self.master
+            target = (widget or self.master)
+            if target is not None:
+                try:
+                    target = target.winfo_toplevel()
+                except Exception:
+                    pass
             if target is None:
                 return
             target.update_idletasks()
@@ -705,7 +749,7 @@ class MonthPickerDialog(tk.Toplevel):
 
             x = wx + (ww - popup_w) // 2
             y = wy + (wh - popup_h) // 2
-            self.geometry(f"+{max(0, int(x))}+{max(0, int(y))}")
+            self.geometry(f"+{int(x)}+{int(y)}")
         except Exception:
             pass
 
@@ -1100,6 +1144,7 @@ class GUI(tk.Frame):
         self.current_year = today.year
         self.current_month = today.month
         self.weekend_rows = set()
+        self.holiday_rows = set()
         self.visible_day_count = len(days)
         self.hidden_rows = set()
 
@@ -1767,14 +1812,20 @@ class GUI(tk.Frame):
         self.visible_day_count = days_in_month
 
         weekend_rows = set()
+        holiday_rows = set()
+        holiday_dates = month_holidays(year, month)
         for idx, day_value in enumerate(day_numbers):
             try:
-                if date(year, month, int(day_value)).weekday() >= 5:
+                day_date = date(year, month, int(day_value))
+                if day_date.weekday() >= 5:
                     weekend_rows.add(idx)
+                if day_date in holiday_dates:
+                    holiday_rows.add(idx)
             except Exception:
                 continue
 
         self.weekend_rows = weekend_rows
+        self.holiday_rows = holiday_rows
         prev_hidden = getattr(self, "hidden_rows", set())
         new_hidden = set()
         total_cols = len(self.table_entries[0]) if self.table_entries else 0
@@ -1784,10 +1835,13 @@ class GUI(tk.Frame):
             try:
                 if is_visible:
                     is_weekend = idx in weekend_rows
+                    is_holiday = idx in holiday_rows
+                    bg_color = HOLIDAY_DAY_BG if is_holiday else (WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG)
+                    fg_color = "black" if (is_weekend or is_holiday) else "white"
                     lbl.config(
                         text=str(day_numbers[idx]),
-                        bg=WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG,
-                        fg="black" if is_weekend else "white",
+                        bg=bg_color,
+                        fg=fg_color,
                     )
                     lbl.grid()
                 else:
@@ -1852,8 +1906,9 @@ class GUI(tk.Frame):
             return
 
         is_weekend = row in getattr(self, "weekend_rows", set())
-        base_bg = WEEKEND_CELL_BG if is_weekend else APP_SURFACE_BG
-        empty_bg = WEEKEND_CELL_BG if is_weekend else CELL_EMPTY_BG
+        is_holiday = row in getattr(self, "holiday_rows", set())
+        base_bg = HOLIDAY_CELL_BG if is_holiday else (WEEKEND_CELL_BG if is_weekend else APP_SURFACE_BG)
+        empty_bg = HOLIDAY_CELL_BG if is_holiday else (WEEKEND_CELL_BG if is_weekend else CELL_EMPTY_BG)
 
         posts_source = getattr(self, "local_work_posts", work_posts)
         post_info_source = getattr(self, "local_post_info", POST_INFO)
@@ -1915,6 +1970,7 @@ class GUI(tk.Frame):
         assignments = {}
         self.incompatible_cells.clear()
         weekend_rows = getattr(self, "weekend_rows", set())
+        holiday_rows = getattr(self, "holiday_rows", set())
 
         for row_idx, row in enumerate(self.table_entries):
             for col_idx, cell in enumerate(row):
@@ -1925,7 +1981,7 @@ class GUI(tk.Frame):
                     continue
 
                 txt = cell.get().strip()
-                empty_bg = WEEKEND_CELL_BG if row_idx in weekend_rows else CELL_EMPTY_BG
+                empty_bg = HOLIDAY_CELL_BG if row_idx in holiday_rows else (WEEKEND_CELL_BG if row_idx in weekend_rows else CELL_EMPTY_BG)
                 if txt:
                     cell.config(state="normal", bg=CELL_FILLED_BG, fg="black")
                     day_name = days[row_idx] if row_idx < len(days) else str(row_idx + 1)
