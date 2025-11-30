@@ -7,7 +7,7 @@ import pickle
 import unicodedata
 import calendar
 import locale
-from datetime import date
+from datetime import date, timedelta
 import Assignation
 from Assignation import assigner_initiales
 from ConstraintsV2 import ConstraintsTable
@@ -966,7 +966,16 @@ class ShiftCountTable(tk.Frame):
         kwargs.setdefault("bg", APP_SURFACE_BG)
         super().__init__(master, **kwargs)
         self.planning_gui = planning_gui
-        self.columns = ["Initiales", "Astreintes (mois)", "Cumul tous mois", "Lignes"]
+        self.columns = [
+            "Initiales",
+            "Semaine (mois)",
+            "WE/Férié (mois)",
+            "Total (mois)",
+            "Cumul total",
+            "Cumul semaine",
+            "Cumul WE/Férié",
+            "Lignes",
+        ]
         self.tree = ttk.Treeview(
             self,
             columns=self.columns,
@@ -976,10 +985,18 @@ class ShiftCountTable(tk.Frame):
         )
         self.tree.heading("Initiales", text="Medecin", anchor="center")
         self.tree.column("Initiales", width=80, anchor="center")
-        self.tree.heading("Astreintes (mois)", text="Astreintes (mois)", anchor="center")
-        self.tree.column("Astreintes (mois)", width=130, anchor="center")
-        self.tree.heading("Cumul tous mois", text="Cumul tous mois", anchor="center")
-        self.tree.column("Cumul tous mois", width=130, anchor="center")
+        self.tree.heading("Semaine (mois)", text="Semaine (mois)", anchor="center")
+        self.tree.column("Semaine (mois)", width=110, anchor="center")
+        self.tree.heading("WE/Férié (mois)", text="WE/Férié (mois)", anchor="center")
+        self.tree.column("WE/Férié (mois)", width=120, anchor="center")
+        self.tree.heading("Total (mois)", text="Total (mois)", anchor="center")
+        self.tree.column("Total (mois)", width=90, anchor="center")
+        self.tree.heading("Cumul total", text="Cumul total", anchor="center")
+        self.tree.column("Cumul total", width=90, anchor="center")
+        self.tree.heading("Cumul semaine", text="Cumul semaine", anchor="center")
+        self.tree.column("Cumul semaine", width=110, anchor="center")
+        self.tree.heading("Cumul WE/Férié", text="Cumul WE/Férié", anchor="center")
+        self.tree.column("Cumul WE/Férié", width=120, anchor="center")
         self.tree.heading("Lignes", text="Lignes d'astreinte", anchor="center")
         self.tree.column("Lignes", width=180, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
@@ -1005,6 +1022,36 @@ class ShiftCountTable(tk.Frame):
             except Exception:
                 continue
 
+        def _day_type(gui_obj, row_idx):
+            """Retourne 'week' ou 'we' selon les règles weekend/férié/vendredi/veille férié."""
+            try:
+                day_text = gui_obj.day_labels[row_idx].cget("text").strip()
+            except Exception:
+                day_text = ""
+            if not day_text.isdigit():
+                return None
+            try:
+                day_num = int(day_text)
+                dt = date(gui_obj.current_year, gui_obj.current_month, day_num)
+            except Exception:
+                return None
+
+            weekend_rows = getattr(gui_obj, "weekend_rows", set())
+            holiday_rows = getattr(gui_obj, "holiday_rows", set())
+            holiday_dates = getattr(gui_obj, "holiday_dates", set())
+            is_holiday = (row_idx in holiday_rows) or (dt in holiday_dates)
+            is_weekend = (row_idx in weekend_rows) or dt.weekday() >= 5
+            is_friday = dt.weekday() == 4
+            try:
+                next_day = dt + timedelta(days=1)
+                next_day_holiday = next_day in holiday_dates and next_day.month == dt.month
+            except Exception:
+                next_day_holiday = False
+
+            if is_holiday or is_weekend or is_friday or next_day_holiday:
+                return "we"
+            return "week"
+
         def collect_counts(gui_obj):
             excl = getattr(gui_obj, 'excluded_from_count', set())
             counts = {}
@@ -1021,23 +1068,29 @@ class ShiftCountTable(tk.Frame):
                     if not names:
                         continue
                     post_name = work_posts[c] if c < len(work_posts) else f"Ligne {c+1}"
+                    day_type = _day_type(gui_obj, r)
+                    if day_type is None:
+                        continue
                     for person in names:
-                        counts[person] = counts.get(person, 0) + 1
+                        bucket = counts.setdefault(person, {"week": 0, "we": 0})
+                        bucket[day_type] = bucket.get(day_type, 0) + 1
                         lines_map.setdefault(person, set()).add(post_name)
             return counts, lines_map
 
         current_counts, current_lines = collect_counts(self.planning_gui)
 
         # Cumul sur tous les onglets/mois (si disponibles)
-        cumulative_counts = dict(current_counts)
+        cumulative_counts = {p: vals.copy() for p, vals in current_counts.items()}
         cumulative_lines = {k: set(v) for k, v in current_lines.items()}
         try:
             for (g, _c, _s) in globals().get("tabs_data", []):
                 if g is self.planning_gui:
                     continue
                 c_counts, c_lines = collect_counts(g)
-                for person, cnt in c_counts.items():
-                    cumulative_counts[person] = cumulative_counts.get(person, 0) + cnt
+                for person, cnts in c_counts.items():
+                    base = cumulative_counts.setdefault(person, {"week": 0, "we": 0})
+                    base["week"] = base.get("week", 0) + cnts.get("week", 0)
+                    base["we"] = base.get("we", 0) + cnts.get("we", 0)
                 for person, lst in c_lines.items():
                     cumulative_lines.setdefault(person, set()).update(lst)
         except Exception:
@@ -1059,10 +1112,27 @@ class ShiftCountTable(tk.Frame):
                 continue
 
         for person in ordered_initials:
-            monthly = current_counts.get(person, 0)
-            cumul = cumulative_counts.get(person, monthly)
+            month_counts = current_counts.get(person, {"week": 0, "we": 0})
+            month_week = month_counts.get("week", 0)
+            month_we = month_counts.get("we", 0)
+            month_total = month_week + month_we
+
+            cumul_counts = cumulative_counts.get(person, {"week": month_week, "we": month_we})
+            cumul_week = cumul_counts.get("week", 0)
+            cumul_we = cumul_counts.get("we", 0)
+            cumul_total = cumul_week + cumul_we
+
             lines = ", ".join(sorted(cumulative_lines.get(person, set()))) if cumulative_lines.get(person) else ""
-            row_values = [person, monthly, cumul, lines]
+            row_values = [
+                person,
+                month_week,
+                month_we,
+                month_total,
+                cumul_total,
+                cumul_week,
+                cumul_we,
+                lines,
+            ]
 
             tag = "evenrow" if row_index % 2 == 0 else "oddrow"
             self.tree.insert("", "end", values=tuple(row_values), tags=(tag,))
@@ -1145,6 +1215,7 @@ class GUI(tk.Frame):
         self.current_month = today.month
         self.weekend_rows = set()
         self.holiday_rows = set()
+        self.holiday_dates = set()
         self.visible_day_count = len(days)
         self.hidden_rows = set()
 
@@ -1826,6 +1897,7 @@ class GUI(tk.Frame):
 
         self.weekend_rows = weekend_rows
         self.holiday_rows = holiday_rows
+        self.holiday_dates = holiday_dates
         prev_hidden = getattr(self, "hidden_rows", set())
         new_hidden = set()
         total_cols = len(self.table_entries[0]) if self.table_entries else 0
@@ -2397,7 +2469,11 @@ class GUI(tk.Frame):
                 pass
             gui_instance.refresh_delete_post_combo()
             if hasattr(gui_instance, 'constraints_app'):
-                gui_instance.constraints_app.refresh_available_posts()
+                try:
+                    if hasattr(gui_instance.constraints_app, "refresh_work_posts"):
+                        gui_instance.constraints_app.refresh_work_posts(work_posts)
+                except Exception:
+                    pass
             gui_instance.schedule_update_colors()
         return new_post_name
 
@@ -2421,7 +2497,11 @@ class GUI(tk.Frame):
             gui_instance.redraw_widgets(preserve_content=True)
             gui_instance.refresh_delete_post_combo()
             if hasattr(gui_instance, 'constraints_app'):
-                gui_instance.constraints_app.refresh_available_posts()
+                try:
+                    if hasattr(gui_instance.constraints_app, "refresh_work_posts"):
+                        gui_instance.constraints_app.refresh_work_posts(work_posts)
+                except Exception:
+                    pass
             gui_instance.schedule_update_colors()
 
     def open_post_action_dialog(self, post_name: str) -> None:
@@ -2614,14 +2694,17 @@ class GUI(tk.Frame):
         for gui_instance in gui_instances:
             labels_map = getattr(gui_instance, 'post_labels', {})
             if old_name in labels_map:
-                labels_tuple = labels_map.pop(old_name)
-                labels_map[new_name] = labels_tuple
-                header_lbl = labels_tuple[0]
+                header_lbl = labels_map.pop(old_name)
+                labels_map[new_name] = header_lbl
                 if header_lbl is not None:
                     header_lbl.config(text=new_name)
             gui_instance.refresh_delete_post_combo()
             if hasattr(gui_instance, 'constraints_app'):
-                gui_instance.constraints_app.refresh_available_posts()
+                try:
+                    if hasattr(gui_instance.constraints_app, "refresh_work_posts"):
+                        gui_instance.constraints_app.refresh_work_posts(work_posts)
+                except Exception:
+                    pass
 
         update_work_posts(work_posts)
 
