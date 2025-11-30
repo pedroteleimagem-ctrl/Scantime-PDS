@@ -1902,6 +1902,19 @@ class GUI(tk.Frame):
         self.cell_availability[(row, col)] = new_state
         self.update_cell(row, col)
 
+    def _collect_valid_initials(self):
+        """
+        Rassemble les initiales connues dans le tableau de contraintes.
+        """
+        initials = set()
+        constraints_app = getattr(self, "constraints_app", None)
+        rows = getattr(constraints_app, "rows", []) if constraints_app is not None else []
+        for cand_row in rows:
+            profile = parse_constraint_row(cand_row)
+            if profile and profile.initial:
+                initials.add(profile.initial.strip())
+        return initials
+
     def choose_month(self):
         """Ouvre un calendrier pour choisir mois/année, puis met à jour l'en-tête + jours."""
         parent = self.winfo_toplevel()
@@ -1952,6 +1965,8 @@ class GUI(tk.Frame):
         total_cols = len(self.table_entries[0]) if self.table_entries else 0
 
         for idx, lbl in enumerate(self.day_labels):
+            if idx >= len(self.table_entries):
+                continue
             is_visible = idx < days_in_month
             try:
                 if is_visible:
@@ -1973,6 +1988,8 @@ class GUI(tk.Frame):
                 pass
 
             for col_idx in range(total_cols):
+                if idx >= len(self.table_frames) or col_idx >= len(self.table_frames[idx]):
+                    continue
                 frame = self.table_frames[idx][col_idx]
                 entry = self.table_entries[idx][col_idx]
                 if not frame or not entry:
@@ -2770,6 +2787,12 @@ class GUI(tk.Frame):
         saved_data = None
         saved_availability = None
         saved_excluded = set(getattr(self, "excluded_from_count", set())) if preserve_content else set()
+        saved_weekend_rows = set(getattr(self, "weekend_rows", set()))
+        saved_holiday_rows = set(getattr(self, "holiday_rows", set()))
+        saved_holiday_dates = set(getattr(self, "holiday_dates", set()))
+        saved_current_year = getattr(self, "current_year", None)
+        saved_current_month = getattr(self, "current_month", None)
+        saved_hidden_rows = set(getattr(self, "hidden_rows", set()))
 
         if preserve_content:
             saved_data = [
@@ -2783,6 +2806,8 @@ class GUI(tk.Frame):
         for widget in self.winfo_children():
             widget.destroy()
 
+        # Reinitialise les structures de libellés pour éviter les doublons après destruction
+        self.day_labels = []
         self.table_entries = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
         self.table_frames = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
         self.table_labels = [[None for _ in range(len(work_posts))] for _ in range(len(days))]
@@ -2818,6 +2843,33 @@ class GUI(tk.Frame):
         else:
             self.excluded_from_count = set()
         self.refresh_exclusion_styles()
+
+        # Réapplique le mois courant pour conserver week-ends/jours fériés après redessin
+        try:
+            cur_y = getattr(self, "current_year", None)
+            cur_m = getattr(self, "current_month", None)
+            if cur_y and cur_m:
+                self.apply_month_selection(cur_y, cur_m)
+        except Exception:
+            # Fallback : réapplique simplement les marquages précédents
+            self.weekend_rows = saved_weekend_rows
+            self.holiday_rows = saved_holiday_rows
+            self.holiday_dates = saved_holiday_dates
+            self.hidden_rows = saved_hidden_rows
+            try:
+                for idx, lbl in enumerate(self.day_labels):
+                    is_weekend = idx in saved_weekend_rows
+                    is_holiday = idx in saved_holiday_rows
+                    fg_color = "black" if (is_weekend or is_holiday) else "white"
+                    bg_color = HOLIDAY_DAY_BG if is_holiday else (WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG)
+                    lbl.config(bg=bg_color, fg=fg_color)
+            except Exception:
+                pass
+        # Si current_year/month ont été perdus (peu probable), restaure les anciens
+        if getattr(self, "current_year", None) is None and saved_current_year:
+            self.current_year = saved_current_year
+        if getattr(self, "current_month", None) is None and saved_current_month:
+            self.current_month = saved_current_month
 
         for r in range(len(self.table_entries)):
             for c in range(len(work_posts)):
@@ -4217,8 +4269,21 @@ if __name__ == '__main__':
                     [cell.get() for cell in row]
                     for row in gui_local.table_entries
                 ]
+                current_y = getattr(gui_local, "current_year", None)
+                current_m = getattr(gui_local, "current_month", None)
                 assigner_initiales(constraints_app_local, gui_local)
                 gui_local.schedule_update_colors()
+                # Restaure l'affichage (week-ends/jours fériés) et recalcule les comptes
+                if current_y and current_m:
+                    try:
+                        gui_local.apply_month_selection(current_y, current_m)
+                    except Exception:
+                        pass
+                if hasattr(gui_local, "shift_count_table"):
+                    try:
+                        gui_local.shift_count_table.update_counts()
+                    except Exception:
+                        pass
 
             assign_btn = ttk.Button(
                 action_box,
