@@ -4221,7 +4221,7 @@ if __name__ == '__main__':
         # --- On recrÃ©e la partie Contraintes ---
         constraints_app_local = None
         if include_constraints:
-            constraints_app_local = ConstraintsTable(bottom_frame, work_posts=work_posts)
+            constraints_app_local = ConstraintsTable(bottom_frame, work_posts=work_posts, planning_gui=gui_local)
             constraints_app_local.grid(row=0, column=0, sticky="nsew")
             bottom_frame.grid_rowconfigure(0, weight=1)
             bottom_frame.grid_columnconfigure(0, weight=1)

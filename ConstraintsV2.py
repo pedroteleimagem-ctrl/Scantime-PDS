@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import calendar
+from datetime import date
 
 # Colonnes du tableau de contraintes (mode mensuel)
 COLUMNS = [
@@ -87,21 +89,22 @@ class MultiDayPopup(tk.Toplevel):
         self.title("Jours d'absence")
         self.resizable(False, False)
         self.selected = set(initial or [])
+        self._drag_start = None
+        self._drag_active = False
+        self._day_widgets = {}
+        self.year = None
+        self.month = None
 
-        grid = tk.Frame(self)
-        grid.pack(padx=10, pady=10)
+        nav = tk.Frame(self)
+        nav.pack(fill="x", padx=10, pady=(10, 4))
+        self._title_var = tk.StringVar()
+        tk.Label(nav, textvariable=self._title_var, font=("Arial", 10, "bold")).pack(side="left", expand=True, fill="x")
 
-        self.vars = {}
-        for day in range(1, 31):
-            var = tk.IntVar(value=1 if day in self.selected else 0)
-            self.vars[day] = var
-            row = (day - 1) // 6
-            col = (day - 1) % 6
-            cb = tk.Checkbutton(grid, text=str(day), variable=var)
-            cb.grid(row=row, column=col, sticky="w", padx=2, pady=2)
+        self.grid_frame = tk.Frame(self)
+        self.grid_frame.pack(padx=10, pady=6)
 
         btns = tk.Frame(self)
-        btns.pack(pady=(8, 6))
+        btns.pack(pady=(8, 10))
         tk.Button(btns, text="OK", width=10, command=self.on_ok).pack(side="left", padx=4)
         tk.Button(btns, text="Annuler", width=10, command=self.on_cancel).pack(side="left", padx=4)
 
@@ -109,8 +112,103 @@ class MultiDayPopup(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.on_cancel())
         self.grab_set()
 
+    def load_month(self, year, month):
+        self.year, self.month = year, month
+        for w in self.grid_frame.winfo_children():
+            w.destroy()
+        self._day_widgets.clear()
+        try:
+            month_label = f"{calendar.month_name[month]} {year}"
+        except Exception:
+            month_label = f"{month}/{year}"
+        self._title_var.set(month_label)
+
+        day_names = ["L", "M", "M", "J", "V", "S", "D"]
+        for idx, dname in enumerate(day_names):
+            tk.Label(self.grid_frame, text=dname, font=("Arial", 9, "bold")).grid(row=0, column=idx, padx=3, pady=3)
+
+        cal = calendar.Calendar(firstweekday=0)
+        for row_idx, week in enumerate(cal.monthdayscalendar(year, month), start=1):
+            for col_idx, day in enumerate(week):
+                if day == 0:
+                    tk.Label(self.grid_frame, text="", width=4).grid(row=row_idx, column=col_idx, padx=2, pady=2)
+                    continue
+                btn = tk.Label(self.grid_frame, text=str(day), width=4, relief="raised", borderwidth=1, bg="white")
+                btn.grid(row=row_idx, column=col_idx, padx=2, pady=2, sticky="nsew")
+                btn.bind("<ButtonPress-1>", lambda e, d=day: self._start_drag(d, e.state))
+                btn.bind("<Enter>", lambda e, d=day: self._drag_over(d))
+                btn.bind("<B1-Motion>", lambda e, d=day: self._drag_over(d))
+                btn.bind("<ButtonRelease-1>", lambda e, d=day: self._end_drag(d, e.state))
+                self._day_widgets[day] = btn
+        self._refresh_display()
+
+    def _shift_month(self, delta):
+        # Navigation désactivée : on reste sur le mois fourni par le planning
+        return
+
+    def _start_drag(self, day, state):
+        self._drag_start = day
+        self._drag_active = True
+        self._shift_active = bool(state & 0x0001)
+        self._preview = {day}
+        self._refresh_display(preview=self._preview)
+
+    def _drag_over(self, day):
+        if not self._drag_active or self._drag_start is None:
+            return
+        start = self._drag_start
+        rng = range(min(start, day), max(start, day) + 1)
+        self._preview = set(rng)
+        self._refresh_display(preview=self._preview)
+
+    def _end_drag(self, day, state):
+        if self._drag_start is None:
+            return
+        self._drag_active = False
+        start = self._drag_start
+        rng = set(range(min(start, day), max(start, day) + 1))
+        ctrl = bool(state & 0x0004)
+        shift = self._shift_active or bool(state & 0x0001)
+        if shift:
+            anchor = self._last_click_day if getattr(self, "_last_click_day", None) else start
+            rng = set(range(min(anchor, day), max(anchor, day) + 1))
+            self.selected = rng
+        elif ctrl:
+            if not self.selected:
+                self.selected = set(rng)
+            else:
+                new_sel = set(self.selected)
+                for d in rng:
+                    if d in new_sel:
+                        new_sel.remove(d)
+                    else:
+                        new_sel.add(d)
+                self.selected = new_sel
+        else:
+            self.selected = set(rng)
+        self._drag_start = None
+        self._last_click_day = day
+        self._preview = set()
+        self._refresh_display()
+
+    def _refresh_display(self, preview=None):
+        preview = preview or set()
+        for day, widget in self._day_widgets.items():
+            in_sel = day in self.selected
+            in_prev = day in preview
+            if in_prev:
+                bg = "#CDE8FF"
+            elif in_sel:
+                bg = "#99D1A7"
+            else:
+                bg = "white"
+            try:
+                widget.config(bg=bg)
+            except Exception:
+                pass
+
     def on_ok(self):
-        self.selected = {day for day, var in self.vars.items() if var.get() == 1}
+        self.selected = {d for d in self.selected if d >= 1}
         self.destroy()
 
     def on_cancel(self):
@@ -120,12 +218,15 @@ class MultiDayPopup(tk.Toplevel):
 class ConstraintsTable(tk.Frame):
     """Tableau de contraintes simplifié (mensuel)."""
 
-    def __init__(self, master=None, work_posts=None):
+    MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 200, 60]
+
+    def __init__(self, master=None, work_posts=None, planning_gui=None):
         super().__init__(master)
         self.rows = []
         self.work_posts = list(work_posts or [])
         self.minimized = False
         self._saved_sash = None
+        self.planning_gui = planning_gui
         self._build_header()
         for _ in range(5):
             self.add_row()
@@ -139,20 +240,21 @@ class ConstraintsTable(tk.Frame):
             tk.Label(header, text=col, font=("Arial", 10, "bold")).grid(
                 row=0, column=i, padx=4, pady=4, sticky="nsew"
             )
-            header.grid_columnconfigure(i, weight=1)
-        # Boutons Ajouter/Supprimer + Minimiser à l'extrémité droite
-        btn_add = tk.Button(header, text="Ajouter", command=self.add_row)
-        btn_add.grid(row=0, column=len(COLUMNS), padx=(8, 2), pady=4, sticky="e")
-        btn_del = tk.Button(header, text="Supprimer", command=self.delete_row)
-        btn_del.grid(row=0, column=len(COLUMNS) + 1, padx=(2, 2), pady=4, sticky="e")
-        self.min_btn = tk.Button(header, text="−", width=2, command=self.toggle_minimize)
-        self.min_btn.grid(row=0, column=len(COLUMNS) + 2, padx=(2, 8), pady=4, sticky="e")
+            header.grid_columnconfigure(i, weight=1, minsize=self.MIN_COL_WIDTHS[i] if i < len(self.MIN_COL_WIDTHS) else 80)
+        # Toolbar aligned right, on the same row as headers but outside the grid cells
+        toolbar = tk.Frame(header)
+        toolbar.grid(row=0, column=len(COLUMNS), sticky="e", padx=(12, 0))
+        btn_add = tk.Button(toolbar, text="Ajouter", command=self.add_row)
+        btn_add.pack(side="left", padx=(0, 4))
+        btn_del = tk.Button(toolbar, text="Supprimer", command=self.delete_row)
+        btn_del.pack(side="left", padx=(0, 4))
+        self.min_btn = tk.Button(toolbar, text="−", width=2, command=self.toggle_minimize)
+        self.min_btn.pack(side="left", padx=(0, 4))
         header.grid_columnconfigure(len(COLUMNS), weight=0)
-        header.grid_columnconfigure(len(COLUMNS) + 1, weight=0)
-        header.grid_columnconfigure(len(COLUMNS) + 2, weight=0)
 
         self.table = tk.Frame(self)
         self.table.grid(row=1, column=0, sticky="nsew")
+        self._apply_column_layout()
 
     # Row management ------------------------------------------------------
     def add_row(self):
@@ -220,8 +322,7 @@ class ConstraintsTable(tk.Frame):
         entries.append(action_btn)
 
         self.rows.append(entries)
-        for col in range(len(COLUMNS) + 1):
-            self.table.grid_columnconfigure(col, weight=1)
+        self._apply_column_layout()
 
     def delete_row(self):
         if not self.rows:
@@ -232,6 +333,7 @@ class ConstraintsTable(tk.Frame):
                 w.destroy()
             except Exception:
                 pass
+        self._apply_column_layout()
 
     # Helpers -------------------------------------------------------------
     def _open_pref_popup(self, btn: tk.Button):
@@ -251,7 +353,15 @@ class ConstraintsTable(tk.Frame):
             current = {int(x.strip()) for x in var.get().split(",") if x.strip().isdigit()}
         except Exception:
             current = set()
+        # Détermine le mois/année courant depuis le planning si dispo
+        if hasattr(self, "planning_gui") and self.planning_gui is not None:
+            year = getattr(self.planning_gui, "current_year", date.today().year)
+            month = getattr(self.planning_gui, "current_month", date.today().month)
+        else:
+            today = date.today()
+            year, month = today.year, today.month
         popup = MultiDayPopup(self, initial=current)
+        popup.load_month(year, month)
         self.wait_window(popup)
         if popup.selected:
             txt = ",".join(str(x) for x in sorted(popup.selected))
@@ -297,7 +407,7 @@ class ConstraintsTable(tk.Frame):
                 if hasattr(paned, "sashpos"):
                     self._saved_sash = paned.sashpos(0)
                     paned.update_idletasks()
-                    header_h = self.header.winfo_height() if hasattr(self, "header") else 0
+                    header_h = (self.header.winfo_height() if hasattr(self, "header") else 0) + (self.children.get('!frame', tk.Frame()).winfo_height() if self.children else 0)
                     total_h = paned.winfo_height()
                     new_pos = max(0, total_h - header_h - 4)
                     paned.sashpos(0, new_pos)
@@ -381,6 +491,19 @@ class ConstraintsTable(tk.Frame):
             # row[3] est le CheckListButton
             try:
                 row[3].update_values(self.work_posts)
+            except Exception:
+                pass
+
+    def _apply_column_layout(self):
+        """Assure l'alignement header/table en fixant minsize/weights identiques."""
+        for idx in range(len(COLUMNS) + 1):  # inclut la colonne action
+            minsize = self.MIN_COL_WIDTHS[idx] if idx < len(self.MIN_COL_WIDTHS) else 80
+            try:
+                self.header.grid_columnconfigure(idx, weight=1 if idx < len(COLUMNS) else 0, minsize=minsize)
+            except Exception:
+                pass
+            try:
+                self.table.grid_columnconfigure(idx, weight=1, minsize=minsize)
             except Exception:
                 pass
 
