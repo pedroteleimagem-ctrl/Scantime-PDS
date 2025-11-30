@@ -644,12 +644,13 @@ def custom_askstring(parent, title, prompt, x, y, initial=""):
 
 class MonthPickerDialog(tk.Toplevel):
     """Petit sélecteur de mois/année avec grille de calendrier."""
-    def __init__(self, parent, initial_date=None):
+    def __init__(self, parent, initial_date=None, anchor_widget=None):
         super().__init__(parent)
         self.title("Choisir un mois")
         self.configure(bg=APP_WINDOW_BG)
         self.resizable(False, False)
         self.result = None
+        self._anchor_widget = anchor_widget or parent
 
         base_date = initial_date or date.today()
         self.month_var = tk.IntVar(value=base_date.month)
@@ -675,7 +676,38 @@ class MonthPickerDialog(tk.Toplevel):
         ttk.Button(btns, text="Annuler", command=self._on_cancel, style=RIBBON_BUTTON_STYLE).pack(side="right")
 
         self._build_calendar()
+        self._center_over_widget(self._anchor_widget)
         self.wait_window(self)
+
+    def _center_over_widget(self, widget):
+        """Centre le popup sur le widget donné (ou l'écran en secours)."""
+        try:
+            self.update_idletasks()
+            target = widget or self.master
+            if target is None:
+                return
+            target.update_idletasks()
+
+            popup_w, popup_h = self.winfo_width(), self.winfo_height()
+            if popup_w <= 0 or popup_h <= 0:
+                return
+
+            try:
+                wx, wy = target.winfo_rootx(), target.winfo_rooty()
+                ww, wh = target.winfo_width(), target.winfo_height()
+            except Exception:
+                wx = wy = 0
+                ww, wh = self.winfo_screenwidth(), self.winfo_screenheight()
+
+            if ww <= 0 or wh <= 0:
+                ww, wh = self.winfo_screenwidth(), self.winfo_screenheight()
+                wx = wy = 0
+
+            x = wx + (ww - popup_w) // 2
+            y = wy + (wh - popup_h) // 2
+            self.geometry(f"+{max(0, int(x))}+{max(0, int(y))}")
+        except Exception:
+            pass
 
     def _update_title(self):
         try:
@@ -1068,6 +1100,8 @@ class GUI(tk.Frame):
         self.current_year = today.year
         self.current_month = today.month
         self.weekend_rows = set()
+        self.visible_day_count = len(days)
+        self.hidden_rows = set()
 
         self._zoom_job = None
         self._zoom_accum = 1.0
@@ -1706,11 +1740,12 @@ class GUI(tk.Frame):
     def choose_month(self):
         """Ouvre un calendrier pour choisir mois/année, puis met à jour l'en-tête + jours."""
         parent = self.winfo_toplevel()
+        anchor = getattr(self, "scroll_canvas", self)
         try:
             initial = date(self.current_year, self.current_month, 1)
         except Exception:
             initial = date.today()
-        picker = MonthPickerDialog(parent, initial_date=initial)
+        picker = MonthPickerDialog(parent, initial_date=initial, anchor_widget=anchor)
         selected_date = getattr(picker, "result", None)
         if selected_date:
             self.apply_month_selection(selected_date.year, selected_date.month)
@@ -1718,7 +1753,7 @@ class GUI(tk.Frame):
     def apply_month_selection(self, year: int, month: int):
         self.current_year = year
         self.current_month = month
-        start_day, days_in_month = self._first_full_week_start(year, month)
+        _, days_in_month = self._first_full_week_start(year, month)
         if 1 <= month <= 12:
             label_text = f"{MONTH_NAMES_FR[month - 1]} {year}"
         else:
@@ -1728,14 +1763,11 @@ class GUI(tk.Frame):
         except Exception:
             pass
 
-        day_numbers = list(range(start_day, days_in_month + 1))
-        while len(day_numbers) < len(self.day_labels):
-            day_numbers.append("")
+        day_numbers = list(range(1, days_in_month + 1))
+        self.visible_day_count = days_in_month
 
         weekend_rows = set()
         for idx, day_value in enumerate(day_numbers):
-            if day_value == "":
-                continue
             try:
                 if date(year, month, int(day_value)).weekday() >= 5:
                     weekend_rows.add(idx)
@@ -1743,36 +1775,51 @@ class GUI(tk.Frame):
                 continue
 
         self.weekend_rows = weekend_rows
+        prev_hidden = getattr(self, "hidden_rows", set())
+        new_hidden = set()
+        total_cols = len(self.table_entries[0]) if self.table_entries else 0
 
-        for idx, (lbl, day_value) in enumerate(zip(self.day_labels, day_numbers)):
+        for idx, lbl in enumerate(self.day_labels):
+            is_visible = idx < days_in_month
             try:
-                if day_value == "":
-                    lbl.config(text="", bg=DAY_LABEL_BG, fg="white")
-                else:
+                if is_visible:
                     is_weekend = idx in weekend_rows
                     lbl.config(
-                        text=str(day_value),
+                        text=str(day_numbers[idx]),
                         bg=WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG,
                         fg="black" if is_weekend else "white",
                     )
+                    lbl.grid()
+                else:
+                    lbl.config(text="", bg=DAY_LABEL_BG, fg="white")
+                    lbl.grid_remove()
+                    new_hidden.add(idx)
             except Exception:
-                continue
+                pass
 
-        for r, row in enumerate(self.table_entries):
-            for c, _ in enumerate(row):
-                try:
-                    self.update_cell(r, c)
-                except Exception:
+            for col_idx in range(total_cols):
+                frame = self.table_frames[idx][col_idx]
+                entry = self.table_entries[idx][col_idx]
+                if not frame or not entry:
                     continue
+                if is_visible:
+                    frame.grid()
+                    if idx in prev_hidden:
+                        self.cell_availability[(idx, col_idx)] = True
+                    self.update_cell(idx, col_idx)
+                else:
+                    frame.grid_remove()
+                    entry.delete(0, "end")
+                    self.cell_availability[(idx, col_idx)] = False
+                    self.update_cell(idx, col_idx)
+
+        self.hidden_rows = new_hidden
         self.schedule_update_colors()
 
     @staticmethod
     def _first_full_week_start(year: int, month: int) -> tuple[int, int]:
-        first_weekday, days_in_month = calendar.monthrange(year, month)
-        start_day = 1 + ((7 - first_weekday) % 7)
-        if start_day > days_in_month:
-            start_day = max(1, days_in_month - 6)
-        return start_day, days_in_month
+        _, days_in_month = calendar.monthrange(year, month)
+        return 1, days_in_month
 
     def select_and_close_posts(self):
         """
@@ -4313,187 +4360,32 @@ if __name__ == '__main__':
 
     # Fonction pour ajouter dynamiquement une nouvelle semaine
 
+    
     def add_new_week():
+        """Ajoute un nouvel onglet mois, vide, cal? sur le mois suivant le 1er onglet."""
         import tkinter as tk
         from tkinter import messagebox
 
         if not tabs_data:
-            messagebox.showerror("Dupliquer une semaine", "Aucune semaine n'est disponible pour la duplication.")
+            messagebox.showerror("Ajouter un mois", "Aucun onglet n'est disponible comme base.")
             return
 
-        week_count = len(tabs_data)
-        source_index = 0
-        if week_count > 1:
-            try:
-                tab_labels = []
-                for idx, tab_id in enumerate(notebook.tabs(), start=1):
-                    label = notebook.tab(tab_id, "text")
-                    if not label:
-                        label = f"Mois {idx}"
-                    tab_labels.append((idx - 1, f"{idx} - {label}"))
-            except Exception:
-                tab_labels = [(idx - 1, f"Mois {idx}") for idx in range(1, week_count + 1)]
+        base_gui = tabs_data[0][0]
+        base_year = getattr(base_gui, "current_year", date.today().year)
+        base_month = getattr(base_gui, "current_month", date.today().month)
 
-            def prompt_week_selection(options):
-                dialog = tk.Toplevel(root)
-                dialog.title("Dupliquer une semaine")
-                dialog.transient(root)
-                dialog.grab_set()
-                try:
-                    root.update_idletasks()
-                    win_w = dialog.winfo_reqwidth()
-                    win_h = dialog.winfo_reqheight()
-                    root_x = root.winfo_rootx()
-                    root_y = root.winfo_rooty()
-                    root_w = root.winfo_width()
-                    root_h = root.winfo_height()
-                    pos_x = root_x + max(0, (root_w - win_w) // 2)
-                    pos_y = root_y + max(0, (root_h - win_h) // 2)
-                    dialog.geometry(f"+{pos_x}+{pos_y}")
-                except Exception:
-                    pass
+        offset = len(tabs_data)
+        target_idx = (base_month - 1) + offset
+        target_year = base_year + (target_idx // 12)
+        target_month = (target_idx % 12) + 1
 
-                container = ttk.Frame(dialog, padding=(12, 10))
-                container.pack(fill="both", expand=True)
-
-                ttk.Label(container, text="Sélectionnez la semaine à dupliquer :").pack(anchor="w")
-
-                list_height = min(10, len(options)) or 1
-                listbox = tk.Listbox(container, selectmode="browse", exportselection=False, height=list_height)
-                for _, display_text in options:
-                    listbox.insert(tk.END, display_text)
-                listbox.pack(fill="both", expand=True, pady=(8, 8))
-                if options:
-                    listbox.select_set(0)
-                    listbox.activate(0)
-
-                selected = {"value": None}
-
-                def on_ok(*_):
-                    selection = listbox.curselection()
-                    if not selection:
-                        messagebox.showwarning("Dupliquer une semaine", "Veuillez sélectionner une semaine.")
-                        return
-                    selected["value"] = options[selection[0]][0]
-                    dialog.destroy()
-
-                def on_cancel():
-                    dialog.destroy()
-
-                btn_frame = ttk.Frame(container)
-                btn_frame.pack(fill="x")
-
-                ttk.Button(btn_frame, text="Annuler", command=on_cancel).pack(side="right", padx=(0, 4))
-                ttk.Button(btn_frame, text="OK", command=on_ok).pack(side="right")
-
-                listbox.bind("<Double-Button-1>", on_ok)
-                dialog.protocol("WM_DELETE_WINDOW", on_cancel)
-                dialog.wait_window(dialog)
-                return selected["value"]
-
-            selection = prompt_week_selection(tab_labels)
-            if selection is None:
-                return
-
-            source_index = selection
-
-
-        # Récupération de la semaine source (1ère par défaut ou choix utilisateur)
-        source_gui, source_constraints, source_shift_table = tabs_data[source_index]
-
-        source_excluded_cells = set(getattr(source_gui, "excluded_from_count", set()))
-
-        # --- Sauvegarde du planning principal (texte et couleurs)
-        planning_data = []
-        planning_colors = []
-        for row in source_gui.table_entries:
-            row_text = []
-            row_bg = []
-            for cell in row:
-                row_text.append(cell.get())
-                row_bg.append(cell.cget("bg"))
-            planning_data.append(row_text)
-            planning_colors.append(row_bg)
-
-        # Sauvegarde de la disponibilitÃ© des cellules
-        source_cell_availability = source_gui.cell_availability.copy()
-
-        # --- Sauvegarde des Ã©tiquettes horaires
-        # On Ã©tend ce quâon sauvegarde : text, bg, fg, bordures, relief
-        # + le flag interne dâexclusion (._dont_count) si prÃ©sent.
-        label_props = []
-        for row in source_gui.table_labels:
-            row_props = []
-            for lbl in row:
-                if lbl:
-                    try:
-                        text = lbl.cget("text")
-                    except Exception:
-                        text = ""
-                    try:
-                        bg = lbl.cget("bg")
-                    except Exception:
-                        bg = ""
-                    try:
-                        fg = lbl.cget("fg")
-                    except Exception:
-                        fg = ""
-                    # Bordures / relief
-                    try:
-                        ht = int(lbl.cget("highlightthickness"))
-                    except Exception:
-                        ht = 0
-                    try:
-                        hb = lbl.cget("highlightbackground")
-                    except Exception:
-                        hb = ""
-                    try:
-                        hc = lbl.cget("highlightcolor")
-                    except Exception:
-                        hc = hb or ""
-                    try:
-                        relief = lbl.cget("relief")
-                    except Exception:
-                        relief = "flat"
-                    try:
-                        bd = int(lbl.cget("bd"))
-                    except Exception:
-                        bd = 0
-                    # Flag de non-comptabilisation (si notre popup lâa posÃ©)
-                    dont_count = getattr(lbl, "_dont_count", False)
-
-                    row_props.append((text, bg, fg, ht, hb, hc, relief, bd, dont_count))
-                else:
-                    row_props.append(("", "", "", 0, "", "", "flat", 0, False))
-            label_props.append(row_props)
-
-        # --- Sauvegarde du tableau de contraintes (inchangÃ©)
-        constraints_data = []
-        for row in source_constraints.rows:
-            row_vals = []
-            for widget in row:
-                if isinstance(widget, tuple) and len(widget) == 3:
-                    absence_state = widget[0]._var.get()
-                    pds_state     = widget[2].get()
-                    row_vals.append((absence_state, pds_state))
-                elif isinstance(widget, tk.Button):
-                    row_vals.append(widget.cget("text"))
-                elif hasattr(widget, "_var"):
-                    row_vals.append(widget._var.get())
-                else:
-                    row_vals.append(widget.get())
-            constraints_data.append(row_vals)
-
-        # --- CrÃ©ation d'une nouvelle semaine
-        i = len(tabs_data) + 1
         frame_for_week = tk.Frame(notebook)
         frame_for_week.pack(fill="both", expand=True)
         new_gui, new_constraints, new_shift_table = create_single_week(frame_for_week)
 
-        # Copie la position du sÃ©parateur (sash) du Mois 1
         try:
             base_sash = None
-            if tabs_data and hasattr(tabs_data[0][0], "paned"):
+            if hasattr(tabs_data[0][0], "paned"):
                 base_sash = tabs_data[0][0].paned.sashpos(0)
             root.update_idletasks()
             if base_sash is not None and hasattr(new_gui, "paned"):
@@ -4501,61 +4393,11 @@ if __name__ == '__main__':
         except Exception:
             pass
 
-        # Recopie de la disponibilitÃ©
-        new_gui.cell_availability = source_cell_availability.copy()
+        try:
+            new_gui.apply_month_selection(target_year, target_month)
+        except Exception:
+            new_gui.schedule_update_colors()
 
-        new_gui.excluded_from_count = set(source_excluded_cells)
-
-        # Recopie du contenu et des couleurs du planning
-        for r, row in enumerate(planning_data):
-            for c, val in enumerate(row):
-                entry = new_gui.table_entries[r][c]
-                entry.delete(0, tk.END)
-                entry.insert(0, val)
-                cell_bg = planning_colors[r][c]
-                normalized_bg = str(cell_bg).strip().lower() if cell_bg else ""
-                if normalized_bg in {"white", "#ffffff"}:
-                    cell_bg = CELL_EMPTY_BG
-                elif normalized_bg in {"light gray", "lightgrey", "#d3d3d3"}:
-                    cell_bg = CELL_FILLED_BG
-                entry.config(bg=cell_bg)
-                new_gui.update_cell(r, c)
-
-        # Recopie des Ã©tiquettes horaires (avec lâÃ©tat dâexclusion + bordure)
-        for r, row in enumerate(label_props):
-            for c, props in enumerate(row):
-                (text, bg, fg, ht, hb, hc, relief, bd, dont_count) = props
-                lbl = new_gui.table_labels[r][c]
-                if not lbl:
-                    continue
-                try:
-                    norm_bg = str(bg).strip().lower() if bg else ""
-                    if norm_bg in {"white", "#ffffff"}:
-                        bg = APP_SURFACE_BG
-                    lbl.config(text=text, bg=bg, fg=fg)
-                except Exception:
-                    pass
-                # Style de bordure/bisel identique Ã  la source
-                try:
-                    lbl.config(
-                        highlightthickness=ht,
-                        highlightbackground=hb or lbl.cget("highlightbackground"),
-                        highlightcolor=hc or (hb or lbl.cget("highlightcolor")),
-                        relief=relief,
-                        bd=bd
-                    )
-                except Exception:
-                    pass
-                # Flag interne pour les dÃ©comptes
-                try:
-                    setattr(lbl, "_dont_count", bool(dont_count))
-                except Exception:
-                    pass
-
-        if hasattr(new_gui, "refresh_exclusion_styles"):
-            new_gui.refresh_exclusion_styles()
-
-        # Recalcule les couleurs + reconstruit les assignments + dÃ©comptes
         new_gui.update_colors(None)
         try:
             new_gui.update_idletasks()
@@ -4563,160 +4405,88 @@ if __name__ == '__main__':
             pass
         new_gui.auto_resize_all_columns()
 
-        # Recopie du tableau de contraintes
-        for idx, row_vals in enumerate(constraints_data):
-            if idx < len(new_constraints.rows):
-                target_row = new_constraints.rows[idx]
-            else:
-                new_constraints.add_row()
-                target_row = new_constraints.rows[-1]
-            for j, val in enumerate(row_vals):
-                widget = target_row[j]
-                if isinstance(widget, tuple) and len(widget) == 3:
-                    toggle, pds_cb, pds_var = widget
-                    absence_state = ""
-                    pds_state = 0
-                    origin_state = "manual"
-                    log_note = ""
-                    if isinstance(val, (list, tuple)):
-                        if len(val) >= 1:
-                            absence_state = val[0]
-                        if len(val) >= 2:
-                            pds_state = val[1]
-                        if len(val) >= 3 and val[2]:
-                            origin_state = val[2]
-                        if len(val) >= 4:
-                            log_note = val[3]
-                    else:
-                        absence_state = val
-                    if hasattr(toggle, "set_state"):
-                        toggle.set_state(absence_state)
-                    else:
-                        toggle._var.set(absence_state)
-                        toggle.config(text=absence_state)
-                    try:
-                        pds_var.set(int(pds_state))
-                    except Exception:
-                        pds_var.set(0)
-                    if pds_var.get():
-                        pds_cb.config(bg="red")
-                    else:
-                        pds_cb.config(bg="SystemButtonFace")
-                    if hasattr(toggle, "set_origin"):
-                        try:
-                            toggle.set_origin(origin_state or "manual", log_text=log_note, notify=False)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            toggle.origin = origin_state
-                            toggle.log_text = log_note
-                        except Exception:
-                            pass
-                    try:
-                        toggle._apply_origin_style()
-                    except Exception:
-                        pass
-                elif isinstance(widget, tk.Button):
-                    widget.config(text=val)
-                elif hasattr(widget, "_var"):
-                    widget._var.set(val)
-                    widget.config(text=val)
-                else:
-                    widget.delete(0, tk.END)
-                    widget.insert(0, val)
-
-        # Sâassure que le menu contextuel de contraintes est actif (si dispo)
-        if hasattr(new_constraints, "rebind_all_rows_context_menu"):
-            new_constraints.rebind_all_rows_context_menu()
-        if hasattr(new_gui, "shift_count_table") and new_gui.shift_count_table is not None:
-            new_gui.shift_count_table.update_counts()
-
-        # Ajoute lâonglet + sÃ©lection
         tabs_data.append((new_gui, new_constraints, new_shift_table))
-        notebook.add(frame_for_week, text=f"Mois {i}")
+        notebook.add(frame_for_week, text=f"Mois {len(tabs_data)}")
         notebook.select(len(tabs_data) - 1)
         renumber_week_tabs()
 
 
-
-    # Fonction pour supprimer la semaine (onglet) en cours
     def remove_current_week():
-        global gui, constraints_app
-
-        # Onglet courant
-        try:
-            current_index = notebook.index(notebook.select())
-        except Exception:
-            messagebox.showerror("Erreur", "Aucun onglet sélectionné.")
-            return
-
-        # Toujours garder au moins 1 semaine
-        if len(tabs_data) <= 1:
-            messagebox.showinfo("Info", "Impossible de supprimer, il doit rester au moins un onglet.")
-            return
-
-        # RÃ©cupÃ©rer l'identifiant et le frame AVANT de l'oublier
-        try:
-            tab_id = notebook.select()  # identifiant style '.!notebook.!frame'
-            tab_widget = root.nametowidget(tab_id)
-        except Exception:
-            tab_id = None
-            tab_widget = None
-
-        # 1) Retirer du Notebook
-        try:
-            if tab_id is not None:
-                notebook.forget(tab_id)
-            else:
-                notebook.forget(current_index)
-        except Exception:
-            pass
-
-        # 2) DÃ©truire physiquement le frame pour libÃ©rer la mÃ©moire
-        try:
-            if tab_widget is not None:
-                tab_widget.destroy()
-        except Exception:
-            pass
-
-        # 3) Retirer les rÃ©fÃ©rences Python
-        try:
-            tabs_data.pop(current_index)
-        except Exception:
-            pass
-
-        # 4) Sélectionner un onglet valide (le prÃ©cÃ©dent si possible)
-        try:
-            new_index = min(current_index, len(tabs_data) - 1)
-            notebook.select(new_index)
-        except Exception:
-            # au cas oÃ¹, on force lâindex 0 si la sÃ©lection Ã©choue
+            global gui, constraints_app
+    
+            # Onglet courant
             try:
-                notebook.select(0)
-                new_index = 0
+                current_index = notebook.index(notebook.select())
             except Exception:
-                # Situation anormale: on stoppe proprement
-                messagebox.showerror("Erreur", "Impossible de sélectionner un onglet valide aprés suppression.")
+                messagebox.showerror("Erreur", "Aucun onglet sélectionné.")
                 return
-
-        # 5) Mettre Ã  jour les pointeurs actifs (important pour raccourcis/menus)
-        try:
-            gui, constraints_app, _ = tabs_data[new_index]
-        except Exception:
-            # Si quelque chose ne va pas, on informe clairement
-            messagebox.showerror("Erreur", "échec de l'affectation du tableau principal aprés suppression.")
-            return
-
-        # 6) Laisser Tk faire le mÃ©nage des tailles/geometry
-        try:
-            root.update_idletasks()
-        except Exception:
-            pass
-        renumber_week_tabs()
-
-
-
+    
+            # Toujours garder au moins 1 semaine
+            if len(tabs_data) <= 1:
+                messagebox.showinfo("Info", "Impossible de supprimer, il doit rester au moins un onglet.")
+                return
+    
+            # RÃ©cupÃ©rer l'identifiant et le frame AVANT de l'oublier
+            try:
+                tab_id = notebook.select()  # identifiant style '.!notebook.!frame'
+                tab_widget = root.nametowidget(tab_id)
+            except Exception:
+                tab_id = None
+                tab_widget = None
+    
+            # 1) Retirer du Notebook
+            try:
+                if tab_id is not None:
+                    notebook.forget(tab_id)
+                else:
+                    notebook.forget(current_index)
+            except Exception:
+                pass
+    
+            # 2) DÃ©truire physiquement le frame pour libÃ©rer la mÃ©moire
+            try:
+                if tab_widget is not None:
+                    tab_widget.destroy()
+            except Exception:
+                pass
+    
+            # 3) Retirer les rÃ©fÃ©rences Python
+            try:
+                tabs_data.pop(current_index)
+            except Exception:
+                pass
+    
+            # 4) Sélectionner un onglet valide (le prÃ©cÃ©dent si possible)
+            try:
+                new_index = min(current_index, len(tabs_data) - 1)
+                notebook.select(new_index)
+            except Exception:
+                # au cas oÃ¹, on force lâindex 0 si la sÃ©lection Ã©choue
+                try:
+                    notebook.select(0)
+                    new_index = 0
+                except Exception:
+                    # Situation anormale: on stoppe proprement
+                    messagebox.showerror("Erreur", "Impossible de sélectionner un onglet valide aprés suppression.")
+                    return
+    
+            # 5) Mettre Ã  jour les pointeurs actifs (important pour raccourcis/menus)
+            try:
+                gui, constraints_app, _ = tabs_data[new_index]
+            except Exception:
+                # Si quelque chose ne va pas, on informe clairement
+                messagebox.showerror("Erreur", "échec de l'affectation du tableau principal aprés suppression.")
+                return
+    
+            # 6) Laisser Tk faire le mÃ©nage des tailles/geometry
+            try:
+                root.update_idletasks()
+            except Exception:
+                pass
+            renumber_week_tabs()
+    
+    
+    
     # On crÃ©e 1 onglet par dÃ©faut
     frame_for_week = tk.Frame(notebook)
     frame_for_week.pack(fill="both", expand=True)
