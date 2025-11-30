@@ -3060,14 +3060,25 @@ def save_status(file_path=None, *, update_caption=True):
         # 6) NOUVEAU : cellules exclues du dÃ©compte
         excluded_cells = sorted(list(getattr(g, "excluded_from_count", set())))
 
-        # On sauvegarde dÃ©sormais 6 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6)
+        # 7) MÃ©tadonnÃ©es (annÃ©e/mois, marquages, lignes masquÃ©es)
+        meta = {
+            "year": getattr(g, "current_year", None),
+            "month": getattr(g, "current_month", None),
+            "hidden_rows": sorted(list(getattr(g, "hidden_rows", set()))),
+            "weekend_rows": sorted(list(getattr(g, "weekend_rows", set()))),
+            "holiday_rows": sorted(list(getattr(g, "holiday_rows", set()))),
+            "holiday_dates": sorted(list(getattr(g, "holiday_dates", set()))),
+        }
+
+        # On sauvegarde dÃ©sormais 7 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6/7)
         all_week_status.append((
             table_data,
             cell_availability_data,
             constraints_data,
             schedule_data,
             week_label_text,
-            excluded_cells
+            excluded_cells,
+            meta,
         ))
 
     # Options dâassignation
@@ -3532,10 +3543,19 @@ def load_status(file_path: str | None = None):
         root.update_idletasks()
         # -------------------------------------------------------------------
 
-        # RecrÃ©er les semaines et injecter les donnÃ©es
+        #         # Recr?er les semaines et injecter les donn?es
         for idx, week_status in enumerate(all_week_status):
-            # Compat descendante : 5 Ã©lÃ©ments (ancienne sauvegarde) ou 6 (nouvelle)
-            if len(week_status) >= 6:
+            # Compat descendante : 5 ?l?ments (ancienne sauvegarde) ou plus (nouvelle)
+            table_data = cell_availability_data = constraints_data = schedule_data = week_label_text = excluded_cells = meta = None
+            if len(week_status) >= 7:
+                (table_data,
+                 cell_availability_data,
+                 constraints_data,
+                 schedule_data,
+                 week_label_text,
+                 excluded_cells,
+                 meta) = week_status
+            elif len(week_status) == 6:
                 (table_data,
                  cell_availability_data,
                  constraints_data,
@@ -3550,7 +3570,7 @@ def load_status(file_path: str | None = None):
                  week_label_text) = week_status
                 excluded_cells = []  # pas d'exclusions dans les anciens fichiers
 
-            # --- NOUVEAU : hÃ©ritage depuis Mois 1 si vide pour cette semaine
+            # --- NOUVEAU : h?ritage depuis Mois 1 si vide pour cette semaine
             if idx > 0 and (not excluded_cells) and first_week_excluded:
                 excluded_cells = list(first_week_excluded)
             # -----------------------------------------------------------------
@@ -3561,7 +3581,17 @@ def load_status(file_path: str | None = None):
             tabs_data.append((g, c, s))
             notebook.add(frame_for_week, text=f"Mois {idx+1}")
 
-            # Planning principal
+            # Appliquer d'abord le mois/ann?e sauvegard?s pour restaurer weekends/feri?s
+            if isinstance(meta, dict):
+                meta_year = meta.get("year")
+                meta_month = meta.get("month")
+                if meta_year and meta_month:
+                    try:
+                        g.apply_month_selection(meta_year, meta_month)
+                    except Exception:
+                        pass
+
+# Planning principal
             for i in range(min(len(table_data), len(g.table_entries))):
                 for j in range(min(len(table_data[i]), len(g.table_entries[i]))):
                     cell = g.table_entries[i][j]
@@ -3577,6 +3607,16 @@ def load_status(file_path: str | None = None):
             for (row, col), _available in cell_availability_data.items():
                 if row < len(g.table_entries) and col < len(g.table_entries[row]):
                     g.update_cell(row, col)
+
+            # RÃ©appliquer marquages/masquages si fournis
+            if isinstance(meta, dict):
+                try:
+                    g.weekend_rows = set(meta.get("weekend_rows", []))
+                    g.holiday_rows = set(meta.get("holiday_rows", []))
+                    g.holiday_dates = set(meta.get("holiday_dates", []))
+                    g.hidden_rows = set(meta.get("hidden_rows", []))
+                except Exception:
+                    pass
 
             # Tableau de contraintes
             for existing_row in c.rows:
