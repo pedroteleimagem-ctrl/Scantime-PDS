@@ -275,27 +275,27 @@ class ConstraintsTable(tk.Frame):
 
     # UI builders ---------------------------------------------------------
     def _build_header(self):
-        header = tk.Frame(self)
-        header.grid(row=0, column=0, sticky="nsew")
-        self.header = header
-        for i, col in enumerate(COLUMNS):
-            tk.Label(header, text=col, font=("Arial", 10, "bold")).grid(
-                row=0, column=i, padx=4, pady=4, sticky="nsew"
-            )
-            header.grid_columnconfigure(i, weight=1, minsize=self.MIN_COL_WIDTHS[i] if i < len(self.MIN_COL_WIDTHS) else 80)
-        # Toolbar aligned right, on the same row as headers but outside the grid cells
-        toolbar = tk.Frame(header)
-        toolbar.grid(row=0, column=len(COLUMNS), sticky="e", padx=(12, 0))
+        # Toolbar séparée pour ne pas perturber l'alignement des titres
+        toolbar = tk.Frame(self)
+        toolbar.grid(row=0, column=0, sticky="e", padx=(0, 0), pady=(0, 2))
         btn_add = tk.Button(toolbar, text="Ajouter", command=self.add_row)
         btn_add.pack(side="left", padx=(0, 4))
         btn_del = tk.Button(toolbar, text="Supprimer", command=self.delete_row)
         btn_del.pack(side="left", padx=(0, 4))
         self.min_btn = tk.Button(toolbar, text="−", width=2, command=self.toggle_minimize)
         self.min_btn.pack(side="left", padx=(0, 4))
-        header.grid_columnconfigure(len(COLUMNS), weight=0)
+
+        header = tk.Frame(self)
+        header.grid(row=1, column=0, sticky="nsew")
+        self.header = header
+        for i, col in enumerate(COLUMNS):
+            tk.Label(header, text=col, font=("Arial", 10, "bold")).grid(
+                row=0, column=i, padx=4, pady=4, sticky="nsew"
+            )
+            header.grid_columnconfigure(i, weight=1, minsize=self.MIN_COL_WIDTHS[i] if i < len(self.MIN_COL_WIDTHS) else 80)
 
         self.table = tk.Frame(self)
-        self.table.grid(row=1, column=0, sticky="nsew")
+        self.table.grid(row=2, column=0, sticky="nsew")
         self._apply_column_layout()
 
     # Row management ------------------------------------------------------
