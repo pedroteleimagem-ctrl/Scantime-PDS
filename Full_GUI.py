@@ -96,6 +96,7 @@ CELL_DISABLED_TEXT = "#6B778D"
 DAY_LABEL_BG = "#0B5E27"
 WEEKEND_DAY_BG = "#FFE9D9"
 WEEKEND_CELL_BG = "#FFF6F2"
+EXCLUDED_CELL_BORDER = "#E0A100"
 SHIFT_EVEN_ROW_BG = "#FFFFFF"
 SHIFT_ODD_ROW_BG = "#F4F6FA"
 RIBBON_FRAME_STYLE = "Ribbon.TFrame"
@@ -1385,6 +1386,56 @@ class GUI(tk.Frame):
                 self.update_cell(day_idx, col_idx)
 
         self.auto_resize_all_columns()
+
+    def is_cell_excluded_from_count(self, row_idx: int, col_idx: int) -> bool:
+        """
+        Indique si la cellule (row_idx, col_idx) est exclue des calculs/décomptes.
+        """
+        try:
+            return (row_idx, col_idx) in self.excluded_from_count
+        except Exception:
+            return False
+
+    def _apply_exclusion_style(self, row: int, col: int, excluded: bool) -> None:
+        """
+        Ajoute ou retire un liseré visuel pour les cellules exclues du décompte.
+        """
+        try:
+            frame = self.table_frames[row][col]
+            entry = self.table_entries[row][col]
+            label = self.table_labels[row][col]
+        except Exception:
+            return
+
+        if frame is None or entry is None:
+            return
+
+        is_disabled = not self.cell_availability.get((row, col), True)
+        border_color = CELL_DISABLED_BG if is_disabled else (EXCLUDED_CELL_BORDER if excluded else APP_DIVIDER)
+        try:
+            frame.config(highlightbackground=border_color, highlightthickness=(2 if excluded else 1))
+        except Exception:
+            pass
+
+        if label is not None:
+            try:
+                label.config(fg=(CELL_DISABLED_TEXT if excluded else "black"))
+            except Exception:
+                pass
+
+    def refresh_exclusion_styles(self) -> None:
+        """
+        Réapplique le style d'exclusion pour chaque cellule (après reload/redraw).
+        """
+        rows = len(self.table_entries)
+        cols = len(self.table_entries[0]) if self.table_entries else 0
+        excluded = getattr(self, "excluded_from_count", set()) or set()
+        for r in range(rows):
+            for c in range(cols):
+                try:
+                    self._apply_exclusion_style(r, c, (r, c) in excluded)
+                except Exception:
+                    continue
 
     def undo_last_change(self):
         """
