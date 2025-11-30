@@ -17,15 +17,54 @@ COLUMNS = [
 def _split_csv(text: str):
     return [p.strip() for p in str(text or "").split(",") if p.strip()]
 
+def _center_popup_over_widget(popup: tk.Toplevel, widget) -> None:
+    """
+    Centre un Toplevel au-dessus du toplevel du widget donnÃ© (gÃ¨re le multi-\xc3\xa9cran).
+    Reprend la logique du sÃ©lecteur de mois Â« Choisir date Â».
+    """
+    try:
+        popup.update_idletasks()
+        target = widget or popup.master
+        try:
+            if target is not None:
+                target = target.winfo_toplevel()
+        except Exception:
+            pass
+        if target is None:
+            return
+        target.update_idletasks()
+
+        popup_w, popup_h = popup.winfo_width(), popup.winfo_height()
+        if popup_w <= 0 or popup_h <= 0:
+            return
+
+        try:
+            wx, wy = target.winfo_rootx(), target.winfo_rooty()
+            ww, wh = target.winfo_width(), target.winfo_height()
+        except Exception:
+            wx = wy = 0
+            ww, wh = popup.winfo_screenwidth(), popup.winfo_screenheight()
+
+        if ww <= 0 or wh <= 0:
+            ww, wh = popup.winfo_screenwidth(), popup.winfo_screenheight()
+            wx = wy = 0
+
+        x = wx + (ww - popup_w) // 2
+        y = wy + (wh - popup_h) // 2
+        popup.geometry(f"+{int(x)}+{int(y)}")
+    except Exception:
+        pass
+
 
 class MultiSelectPopup(tk.Toplevel):
     """Popup multi-sélection générique."""
 
-    def __init__(self, master, values, preselected=None):
+    def __init__(self, master, values, preselected=None, anchor_widget=None):
         super().__init__(master)
         self.title("Sélection")
         self.resizable(False, False)
         self.selected = []
+        self._anchor_widget = anchor_widget or master
         pre = set(preselected or [])
         frame = tk.Frame(self)
         frame.pack(padx=10, pady=10, fill="both", expand=True)
@@ -43,6 +82,7 @@ class MultiSelectPopup(tk.Toplevel):
         self.bind("<Return>", lambda e: self.on_ok())
         self.bind("<Escape>", lambda e: self.on_cancel())
         self.grab_set()
+        _center_popup_over_widget(self, self._anchor_widget)
 
     def on_ok(self):
         self.selected = [self.listbox.get(i) for i in self.listbox.curselection()]
@@ -63,7 +103,7 @@ class CheckListButton(tk.Button):
 
     def _open_popup(self):
         preselected = _split_csv(self._var.get())
-        popup = MultiSelectPopup(self, self._values, preselected=preselected)
+        popup = MultiSelectPopup(self, self._values, preselected=preselected, anchor_widget=self)
         self.wait_window(popup)
         if popup.selected:
             txt = ", ".join(popup.selected)
@@ -84,7 +124,7 @@ class CheckListButton(tk.Button):
 class MultiDayPopup(tk.Toplevel):
     """Popup avec cases 1..30 pour choisir les jours d'absence."""
 
-    def __init__(self, master, initial=None):
+    def __init__(self, master, initial=None, anchor_widget=None):
         super().__init__(master)
         self.title("Jours d'absence")
         self.resizable(False, False)
@@ -94,6 +134,7 @@ class MultiDayPopup(tk.Toplevel):
         self._day_widgets = {}
         self.year = None
         self.month = None
+        self._anchor_widget = anchor_widget or master
 
         nav = tk.Frame(self)
         nav.pack(fill="x", padx=10, pady=(10, 4))
@@ -141,6 +182,7 @@ class MultiDayPopup(tk.Toplevel):
                 btn.bind("<ButtonRelease-1>", lambda e, d=day: self._end_drag(d, e.state))
                 self._day_widgets[day] = btn
         self._refresh_display()
+        _center_popup_over_widget(self, self._anchor_widget)
 
     def _shift_month(self, delta):
         # Navigation désactivée : on reste sur le mois fourni par le planning
@@ -305,8 +347,9 @@ class ConstraintsTable(tk.Frame):
             self.table,
             text="Sélectionner",
             font=("Arial", 9),
-            command=lambda v=abs_var, b=None: self._open_days_popup(v, abs_btn),
         )
+        # Commande configurée après création pour capturer abs_btn
+        abs_btn.config(command=lambda v=abs_var, b=abs_btn: self._open_days_popup(v, b))
         abs_btn.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
         abs_btn.var = abs_var
         entries.append(abs_btn)
@@ -338,7 +381,7 @@ class ConstraintsTable(tk.Frame):
     # Helpers -------------------------------------------------------------
     def _open_pref_popup(self, btn: tk.Button):
         preselected = _split_csv(btn._var.get())
-        popup = MultiSelectPopup(self, self.work_posts, preselected=preselected)
+        popup = MultiSelectPopup(self, self.work_posts, preselected=preselected, anchor_widget=btn)
         self.wait_window(popup)
         if popup.selected:
             txt = ", ".join(popup.selected)
@@ -360,7 +403,7 @@ class ConstraintsTable(tk.Frame):
         else:
             today = date.today()
             year, month = today.year, today.month
-        popup = MultiDayPopup(self, initial=current)
+        popup = MultiDayPopup(self, initial=current, anchor_widget=btn)
         popup.load_month(year, month)
         self.wait_window(popup)
         if popup.selected:
