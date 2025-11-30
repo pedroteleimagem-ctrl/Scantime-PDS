@@ -1080,12 +1080,10 @@ class ShiftCountTable(tk.Frame):
         current_counts, current_lines = collect_counts(self.planning_gui)
 
         # Cumul sur tous les onglets/mois (si disponibles)
-        cumulative_counts = {p: vals.copy() for p, vals in current_counts.items()}
-        cumulative_lines = {k: set(v) for k, v in current_lines.items()}
+        cumulative_counts = {}
+        cumulative_lines = {}
         try:
             for (g, _c, _s) in globals().get("tabs_data", []):
-                if g is self.planning_gui:
-                    continue
                 c_counts, c_lines = collect_counts(g)
                 for person, cnts in c_counts.items():
                     base = cumulative_counts.setdefault(person, {"week": 0, "we": 0})
