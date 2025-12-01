@@ -3787,8 +3787,9 @@ def load_status(file_path: str | None = None):
                         except Exception:
                             pass
                     elif hasattr(widget, "_var"):
-                        widget._var.set(value)
-                        widget.config(text=value)
+                        val_str = "" if value in (None, "Sélectionner") else str(value)
+                        widget._var.set(val_str)
+                        widget.config(text=val_str or "Sélectionner")
                     elif isinstance(widget, tk.Button):
                         if getattr(widget, "_is_row_action_button", False):
                             widget.config(text="+")

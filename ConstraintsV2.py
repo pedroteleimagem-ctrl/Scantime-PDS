@@ -9,6 +9,7 @@ COLUMNS = [
     "Participation (%)",
     "Lignes préférentielles",
     "Lignes non assurées",
+    "Associations",
     "Absences (jours du mois)",
     "Commentaire",
 ]
@@ -260,7 +261,7 @@ class MultiDayPopup(tk.Toplevel):
 class ConstraintsTable(tk.Frame):
     """Tableau de contraintes simplifié (mensuel)."""
 
-    MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 200, 60]
+    MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 170, 200, 60]
 
     def __init__(self, master=None, work_posts=None, planning_gui=None):
         super().__init__(master)
@@ -377,6 +378,11 @@ class ConstraintsTable(tk.Frame):
         non_btn.grid(row=idx, column=3, padx=4, pady=2, sticky="ew")
         entries.append(non_btn)
 
+        # Associations possibles (multi-sélection)
+        assoc_btn = CheckListButton(self.table, values=self.work_posts, font=("Arial", 9))
+        assoc_btn.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
+        entries.append(assoc_btn)
+
         # Absences bouton + var
         abs_var = tk.StringVar(value="")
         abs_btn = tk.Button(
@@ -386,18 +392,18 @@ class ConstraintsTable(tk.Frame):
         )
         # Commande configurée après création pour capturer abs_btn
         abs_btn.config(command=lambda v=abs_var, b=abs_btn: self._open_days_popup(v, b))
-        abs_btn.grid(row=idx, column=4, padx=4, pady=2, sticky="ew")
+        abs_btn.grid(row=idx, column=5, padx=4, pady=2, sticky="ew")
         abs_btn.var = abs_var
         entries.append(abs_btn)
 
         # Commentaire
         comment = tk.Entry(self.table, width=20)
-        comment.grid(row=idx, column=5, padx=4, pady=2, sticky="ew")
+        comment.grid(row=idx, column=6, padx=4, pady=2, sticky="ew")
         entries.append(comment)
 
         # Bouton d'action (+) en fin de ligne (placeholder)
         action_btn = tk.Button(self.table, text="+", width=3)
-        action_btn.grid(row=idx, column=6, padx=4, pady=2, sticky="e")
+        action_btn.grid(row=idx, column=7, padx=4, pady=2, sticky="e")
         entries.append(action_btn)
 
         self.rows.append(entries)
@@ -576,9 +582,10 @@ class ConstraintsTable(tk.Frame):
                 part_val = ""
             pref = getattr(row[2], "_var", tk.StringVar(value="")).get()
             non = getattr(row[3], "_var", tk.StringVar(value="")).get() if hasattr(row[3], "_var") else ""
-            abs_days = getattr(row[4], "var", tk.StringVar(value="")).get()
+            assoc = getattr(row[4], "_var", tk.StringVar(value="")).get() if hasattr(row[4], "_var") else ""
+            abs_days = getattr(row[5], "var", tk.StringVar(value="")).get()
             try:
-                comment = row[5].get().strip()
+                comment = row[6].get().strip()
             except Exception:
                 comment = ""
             data.append({
@@ -586,6 +593,7 @@ class ConstraintsTable(tk.Frame):
                 "participation": part_val or "100",
                 "preferences": pref,
                 "non_assurees": non,
+                "associations": assoc,
                 "absences": abs_days,
                 "commentaire": comment,
             })
@@ -610,17 +618,24 @@ class ConstraintsTable(tk.Frame):
             if hasattr(row[3], "_var"):
                 row[3]._var.set(row_dict.get("non_assurees", ""))
                 row[3].config(text=row[3]._var.get() or "Sélectionner")
-            row[4].var.set(row_dict.get("absences", ""))
-            row[4].config(text=row[4].var.get() or "Sélectionner")
-            row[5].insert(0, row_dict.get("commentaire", ""))
+            if hasattr(row[4], "_var"):
+                row[4]._var.set(row_dict.get("associations", ""))
+                row[4].config(text=row[4]._var.get() or "Sélectionner")
+            row[5].var.set(row_dict.get("absences", ""))
+            row[5].config(text=row[5].var.get() or "Sélectionner")
+            row[6].insert(0, row_dict.get("commentaire", ""))
 
     def refresh_work_posts(self, new_posts):
-        """Met à jour la liste des postes utilisable pour préf/non assurées."""
+        """Met à jour la liste des postes utilisable pour préf/non assurées/associations."""
         self.work_posts = list(new_posts or [])
         for row in self.rows:
-            # row[3] est le CheckListButton
+            # row[3] et row[4] sont des CheckListButton
             try:
                 row[3].update_values(self.work_posts)
+            except Exception:
+                pass
+            try:
+                row[4].update_values(self.work_posts)
             except Exception:
                 pass
 
