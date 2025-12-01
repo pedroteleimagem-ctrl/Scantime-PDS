@@ -975,7 +975,6 @@ class ShiftCountTable(tk.Frame):
             "Cumul total",
             "Cumul semaine",
             "Cumul WE/Férié",
-            "Lignes",
         ]
         self.tree = ttk.Treeview(
             self,
@@ -998,8 +997,6 @@ class ShiftCountTable(tk.Frame):
         self.tree.column("Cumul semaine", width=110, anchor="center")
         self.tree.heading("Cumul WE/Férié", text="Cumul WE/Férié", anchor="center")
         self.tree.column("Cumul WE/Férié", width=120, anchor="center")
-        self.tree.heading("Lignes", text="Lignes d'astreinte", anchor="center")
-        self.tree.column("Lignes", width=180, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
         self.tree.tag_configure("highlight", background="#FFF4B5")
         self.tree.tag_configure("eligible", background="#CBE8CE")
@@ -1056,7 +1053,6 @@ class ShiftCountTable(tk.Frame):
         def collect_counts(gui_obj):
             excl = getattr(gui_obj, 'excluded_from_count', set())
             counts = {}
-            lines_map = {}
             for r, row in enumerate(gui_obj.table_entries):
                 for c, cell in enumerate(row):
                     if not cell or (r, c) in excl:
@@ -1068,30 +1064,25 @@ class ShiftCountTable(tk.Frame):
                     names = extract_names_from_cell(raw_value, valid_initials)
                     if not names:
                         continue
-                    post_name = work_posts[c] if c < len(work_posts) else f"Ligne {c+1}"
                     day_type = _day_type(gui_obj, r)
                     if day_type is None:
                         continue
                     for person in names:
                         bucket = counts.setdefault(person, {"week": 0, "we": 0})
                         bucket[day_type] = bucket.get(day_type, 0) + 1
-                        lines_map.setdefault(person, set()).add(post_name)
-            return counts, lines_map
+            return counts
 
-        current_counts, current_lines = collect_counts(self.planning_gui)
+        current_counts = collect_counts(self.planning_gui)
 
         # Cumul sur tous les onglets/mois (si disponibles)
         cumulative_counts = {}
-        cumulative_lines = {}
         try:
             for (g, _c, _s) in globals().get("tabs_data", []):
-                c_counts, c_lines = collect_counts(g)
+                c_counts = collect_counts(g)
                 for person, cnts in c_counts.items():
                     base = cumulative_counts.setdefault(person, {"week": 0, "we": 0})
                     base["week"] = base.get("week", 0) + cnts.get("week", 0)
                     base["we"] = base.get("we", 0) + cnts.get("we", 0)
-                for person, lst in c_lines.items():
-                    cumulative_lines.setdefault(person, set()).update(lst)
         except Exception:
             pass
 
@@ -1121,7 +1112,6 @@ class ShiftCountTable(tk.Frame):
             cumul_we = cumul_counts.get("we", 0)
             cumul_total = cumul_week + cumul_we
 
-            lines = ", ".join(sorted(cumulative_lines.get(person, set()))) if cumulative_lines.get(person) else ""
             row_values = [
                 person,
                 month_week,
@@ -1130,7 +1120,6 @@ class ShiftCountTable(tk.Frame):
                 cumul_total,
                 cumul_week,
                 cumul_we,
-                lines,
             ]
 
             tag = "evenrow" if row_index % 2 == 0 else "oddrow"
