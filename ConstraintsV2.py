@@ -332,6 +332,7 @@ class ConstraintsTable(tk.Frame):
         self.table_inner.bind("<Configure>", _on_frame_config)
         self.table_canvas.bind("<Configure>", _on_canvas_config)
         self._apply_column_layout()
+        self._setup_mousewheel()
 
     # Row management ------------------------------------------------------
     def add_row(self):
@@ -448,6 +449,57 @@ class ConstraintsTable(tk.Frame):
         else:
             var.set("")
             btn.config(text="Sélectionner")
+
+    def _setup_mousewheel(self):
+        """Active la molette pour faire défiler le tableau des contraintes."""
+        manager = None
+        try:
+            from Full_GUI import get_mousewheel_manager  # import tardif pour éviter les cycles
+            manager = get_mousewheel_manager
+        except Exception:
+            manager = None
+
+        # Si le gestionnaire global existe, on s'en sert pour rester cohérent avec le planning.
+        if manager is not None:
+            try:
+                manager(self).register(self.table_canvas, self.table_inner)
+                return
+            except Exception:
+                pass
+
+        # Fallback local (mode standalone) : route la molette vers le canvas si la souris est dessus.
+        active = {"inside": False}
+
+        def _on_wheel(event):
+            if not active["inside"]:
+                return
+            delta = getattr(event, "delta", 0)
+            if delta:
+                step = -1 if delta > 0 else 1
+            elif getattr(event, "num", None) == 4:
+                step = -1
+            elif getattr(event, "num", None) == 5:
+                step = 1
+            else:
+                return
+            try:
+                self.table_canvas.yview_scroll(step, "units")
+            except Exception:
+                pass
+            return "break"
+
+        def _activate(_e=None):
+            active["inside"] = True
+
+        def _deactivate(_e=None):
+            active["inside"] = False
+
+        for widget in (self.table_canvas, self.table_inner):
+            widget.bind("<Enter>", _activate, add="+")
+            widget.bind("<Leave>", _deactivate, add="+")
+        root = self.table_canvas.winfo_toplevel()
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            root.bind_all(seq, _on_wheel, add="+")
 
     def _on_part_wheel(self, event, var: tk.StringVar, delta_override=None):
         """Scroll facile par pas de 5% (0..100)."""
