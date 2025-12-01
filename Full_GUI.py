@@ -1204,6 +1204,7 @@ class GUI(tk.Frame):
         self.weekend_rows = set()
         self.holiday_rows = set()
         self.holiday_dates = set()
+        self._holiday_popup = None
         self.visible_day_count = len(days)
         self.hidden_rows = set()
 
@@ -1335,6 +1336,7 @@ class GUI(tk.Frame):
                 pady=4,
             )
             day_lbl.grid(row=grid_row, column=0, padx=pad, pady=pad, sticky="nsew")
+            day_lbl.bind("<Button-1>", lambda e, idx=day_idx: self.open_holiday_popup(idx))
             self.day_labels.append(day_lbl)
 
             for col_idx, post in enumerate(posts_source):
@@ -1959,16 +1961,11 @@ class GUI(tk.Frame):
             is_visible = idx < days_in_month
             try:
                 if is_visible:
-                    is_weekend = idx in weekend_rows
-                    is_holiday = idx in holiday_rows
-                    bg_color = HOLIDAY_DAY_BG if is_holiday else (WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG)
-                    fg_color = "black" if (is_weekend or is_holiday) else "white"
                     lbl.config(
-                        text=str(day_numbers[idx]),
-                        bg=bg_color,
-                        fg=fg_color,
+                        text=str(day_numbers[idx])
                     )
                     lbl.grid()
+                    self._apply_day_label_style(idx)
                 else:
                     lbl.config(text="", bg=DAY_LABEL_BG, fg="white")
                     lbl.grid_remove()
@@ -1996,6 +1993,120 @@ class GUI(tk.Frame):
 
         self.hidden_rows = new_hidden
         self.schedule_update_colors()
+
+    def _row_to_date(self, row_idx: int) -> date | None:
+        """
+        Convertit l'index de ligne en objet date en se basant sur le libellé du jour.
+        """
+        try:
+            if not (0 <= row_idx < len(self.day_labels)):
+                return None
+            label_text = self.day_labels[row_idx].cget("text").strip()
+            if not label_text.isdigit():
+                return None
+            return date(self.current_year, self.current_month, int(label_text))
+        except Exception:
+            return None
+
+    def _apply_day_label_style(self, row_idx: int) -> None:
+        """
+        Applique la coloration weekend/jour férié sur le libellé de jour.
+        """
+        try:
+            lbl = self.day_labels[row_idx]
+        except Exception:
+            return
+        is_weekend = row_idx in getattr(self, "weekend_rows", set())
+        is_holiday = row_idx in getattr(self, "holiday_rows", set())
+        bg_color = HOLIDAY_DAY_BG if is_holiday else (WEEKEND_DAY_BG if is_weekend else DAY_LABEL_BG)
+        fg_color = "black" if (is_weekend or is_holiday) else "white"
+        try:
+            lbl.config(bg=bg_color, fg=fg_color)
+        except Exception:
+            pass
+
+    def refresh_day_labels(self) -> None:
+        """Réapplique la couleur de tous les libellés de jours."""
+        for idx in range(len(self.day_labels)):
+            self._apply_day_label_style(idx)
+
+    def set_day_holiday(self, row_idx: int, is_holiday: bool) -> None:
+        """
+        Marque ou dé-marque une ligne comme jour férié, met à jour les couleurs et les données.
+        """
+        if not (0 <= row_idx < len(self.day_labels)):
+            return
+        if is_holiday:
+            self.holiday_rows.add(row_idx)
+            dt = self._row_to_date(row_idx)
+            if dt:
+                self.holiday_dates.add(dt)
+        else:
+            self.holiday_rows.discard(row_idx)
+            dt = self._row_to_date(row_idx)
+            if dt:
+                self.holiday_dates.discard(dt)
+        self._apply_day_label_style(row_idx)
+        self.schedule_update_colors()
+
+    def open_holiday_popup(self, day_idx: int) -> None:
+        """
+        Affiche un petit popup avec une case à cocher pour marquer/démarquer un jour férié.
+        """
+        try:
+            if day_idx >= getattr(self, "visible_day_count", len(days)):
+                return
+            lbl = self.day_labels[day_idx]
+            label_text = lbl.cget("text").strip()
+            if not label_text.isdigit():
+                return
+        except Exception:
+            return
+
+        try:
+            if self._holiday_popup is not None and self._holiday_popup.winfo_exists():
+                self._holiday_popup.destroy()
+        except Exception:
+            pass
+
+        popup = tk.Toplevel(self)
+        popup.wm_overrideredirect(True)
+        try:
+            popup.attributes("-topmost", True)
+        except Exception:
+            pass
+        popup.configure(bg=APP_SURFACE_BG, padx=10, pady=8, bd=1, relief="solid")
+
+        info_lbl = tk.Label(popup, text=f"Jour {label_text}", bg=APP_SURFACE_BG, fg="black")
+        info_lbl.pack(anchor="w")
+
+        var = tk.BooleanVar(value=(day_idx in getattr(self, "holiday_rows", set())))
+        cb = tk.Checkbutton(
+            popup,
+            text="Jour férié",
+            variable=var,
+            bg=APP_SURFACE_BG,
+            anchor="w",
+            command=lambda: self.set_day_holiday(day_idx, var.get()),
+        )
+        cb.pack(anchor="w", pady=(6, 2))
+
+        popup.update_idletasks()
+        try:
+            x = lbl.winfo_rootx() + lbl.winfo_width() + 8
+            y = lbl.winfo_rooty()
+            popup.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        popup.bind("<FocusOut>", lambda e: popup.destroy())
+        popup.bind("<Escape>",   lambda e: popup.destroy())
+        popup.bind("<Destroy>",  lambda e: setattr(self, "_holiday_popup", None))
+        try:
+            popup.focus_force()
+        except Exception:
+            pass
+        self._holiday_popup = popup
 
     @staticmethod
     def _first_full_week_start(year: int, month: int) -> tuple[int, int]:
@@ -2839,6 +2950,12 @@ class GUI(tk.Frame):
             cur_m = getattr(self, "current_month", None)
             if cur_y and cur_m:
                 self.apply_month_selection(cur_y, cur_m)
+                if preserve_content:
+                    self.weekend_rows = set(saved_weekend_rows)
+                    self.holiday_rows = set(saved_holiday_rows)
+                    self.holiday_dates = set(saved_holiday_dates)
+                    self.hidden_rows = set(saved_hidden_rows)
+                    self.refresh_day_labels()
         except Exception:
             # Fallback : réapplique simplement les marquages précédents
             self.weekend_rows = saved_weekend_rows
@@ -3610,6 +3727,7 @@ def load_status(file_path: str | None = None):
                     g.holiday_rows = set(meta.get("holiday_rows", []))
                     g.holiday_dates = set(meta.get("holiday_dates", []))
                     g.hidden_rows = set(meta.get("hidden_rows", []))
+                    g.refresh_day_labels()
                 except Exception:
                     pass
 
