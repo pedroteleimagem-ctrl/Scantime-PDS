@@ -3860,6 +3860,160 @@ def load_status(file_path: str | None = None):
 
 
 
+def _insert_names_into_constraints(names: list[str], table) -> tuple[int, int]:
+    """
+    Injecte une liste de noms dans le tableau de contraintes :
+    - Remplit d'abord les lignes vides existantes.
+    - Ajoute de nouvelles lignes si nécessaire.
+    Renvoie (ajoutés, ignorés car doublons).
+    """
+    added = 0
+    skipped = 0
+    if table is None:
+        return added, len(names)
+
+    rows = getattr(table, "rows", [])
+    try:
+        existing = [row[0].get().strip() for row in rows if row and hasattr(row[0], "get")]
+    except Exception:
+        existing = []
+    seen = {s.lower() for s in existing if s}
+
+    def _set_initial(row_obj, name: str):
+        try:
+            entry = row_obj[0]
+            entry.delete(0, "end")
+            entry.insert(0, name)
+        except Exception:
+            pass
+
+    empty_rows = [row for row in rows if row and hasattr(row[0], "get") and not row[0].get().strip()]
+
+    for name in names:
+        norm = name.lower()
+        if norm in seen:
+            skipped += 1
+            continue
+        target_row = None
+        if empty_rows:
+            target_row = empty_rows.pop(0)
+        else:
+            try:
+                table.add_row()
+                target_row = table.rows[-1]
+            except Exception:
+                skipped += 1
+                continue
+        _set_initial(target_row, name)
+        seen.add(norm)
+        added += 1
+
+    return added, skipped
+
+
+def insert_names_popup():
+    """
+    Ouvre une fenêtre pour coller des noms (depuis Excel ou texte) et les insère
+    dans le tableau de contraintes. Remplit les lignes vides existantes puis en
+    crée de nouvelles si besoin.
+    """
+    from tkinter import messagebox
+
+    global constraints_app
+    target_table = constraints_app
+    if target_table is None:
+        messagebox.showinfo("Insérer noms", "Aucun tableau de contraintes actif. Ouvrez un planning d'abord.")
+        return
+
+    parent = None
+    try:
+        parent = target_table.winfo_toplevel()
+    except Exception:
+        parent = None
+
+    popup = tk.Toplevel(parent)
+    popup.title("Insérer des noms")
+    popup.configure(bg=APP_WINDOW_BG)
+    popup.resizable(False, False)
+    popup.transient(parent)
+    popup.grab_set()
+
+    instruction = tk.Label(
+        popup,
+        text="Collez les noms (séparés par retour à la ligne, virgule ou point-virgule) :",
+        bg=APP_WINDOW_BG,
+        fg="black",
+        justify="left",
+        wraplength=360,
+        padx=8,
+        pady=8,
+    )
+    instruction.pack(fill="x")
+
+    text_box = tk.Text(popup, width=50, height=10, wrap="word", bg="white")
+    text_box.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+    text_box.focus_set()
+
+    btns = ttk.Frame(popup, padding=(10, 0, 10, 10))
+    btns.pack(fill="x")
+
+    def _center_popup_over_widget(win, widget):
+        try:
+            win.update_idletasks()
+            target = widget or win.master
+            try:
+                target = target.winfo_toplevel()
+            except Exception:
+                pass
+            if target is None:
+                return
+            target.update_idletasks()
+            pw, ph = win.winfo_width(), win.winfo_height()
+            if pw <= 0 or ph <= 0:
+                return
+            try:
+                wx, wy = target.winfo_rootx(), target.winfo_rooty()
+                ww, wh = target.winfo_width(), target.winfo_height()
+            except Exception:
+                wx = wy = 0
+                ww, wh = win.winfo_screenwidth(), win.winfo_screenheight()
+            if ww <= 0 or wh <= 0:
+                ww, wh = win.winfo_screenwidth(), win.winfo_screenheight()
+                wx = wy = 0
+            x = wx + (ww - pw) // 2
+            y = wy + (wh - ph) // 2
+            win.geometry(f"+{int(x)}+{int(y)}")
+        except Exception:
+            pass
+
+    def _on_cancel():
+        popup.destroy()
+
+    def _on_ok():
+        raw = text_box.get("1.0", "end")
+        parts = re.split(r"[;,\n\r\t]+", raw)
+        names = []
+        for p in parts:
+            name = p.strip()
+            if name:
+                names.append(name)
+        if not names:
+            messagebox.showinfo("Insérer noms", "Aucun nom détecté.")
+            return
+        added, skipped = _insert_names_into_constraints(names, target_table)
+        msg = f"{added} nom(s) inséré(s)."
+        if skipped:
+            msg += f" {skipped} doublon(s) ignoré(s)."
+        messagebox.showinfo("Insérer noms", msg)
+        popup.destroy()
+
+    ttk.Button(btns, text="Annuler", command=_on_cancel, style=RIBBON_BUTTON_STYLE).pack(side="right")
+    ttk.Button(btns, text="Valider", command=_on_ok, style=RIBBON_BUTTON_STYLE).pack(side="right", padx=(0, 6))
+
+    _center_popup_over_widget(popup, target_table)
+    popup.wait_window(popup)
+
+
 def import_layout():
     """
     Importe uniquement la mise en page du planning principal depuis un fichier .pkl :
@@ -4052,7 +4206,7 @@ if __name__ == '__main__':
 
     # Nouveau menu Imports (inchangÃ©)
     import_menu = tk.Menu(menu_bar, tearoff=0)
-    import_menu.add_command(label="Import Layout",                         command=import_layout)
+    import_menu.add_command(label="Insérer noms",                          command=insert_names_popup)
     import_menu.add_command(label="Import Absences",                       command=import_absences)
     import_menu.add_command(label="Import Conflits (.pkl)",                command=import_conflicts)
     import_menu.add_command(label="Vérifier Conflits inter-plannings (.pkl)", command=check_cross_conflicts)

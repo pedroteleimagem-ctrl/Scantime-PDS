@@ -267,8 +267,13 @@ class ConstraintsTable(tk.Frame):
         self.rows = []
         self.work_posts = list(work_posts or [])
         self.minimized = False
+        self.table_container = None
+        self.table_canvas = None
+        self.table_inner = None
         self._saved_sash = None
         self.planning_gui = planning_gui
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         self._build_header()
         for _ in range(5):
             self.add_row()
@@ -294,8 +299,38 @@ class ConstraintsTable(tk.Frame):
             )
             header.grid_columnconfigure(i, weight=1, minsize=self.MIN_COL_WIDTHS[i] if i < len(self.MIN_COL_WIDTHS) else 80)
 
-        self.table = tk.Frame(self)
-        self.table.grid(row=2, column=0, sticky="nsew")
+        self.table_container = tk.Frame(self)
+        self.table_container.grid(row=2, column=0, sticky="nsew")
+
+        self.table_canvas = tk.Canvas(self.table_container, highlightthickness=0)
+        vbar = tk.Scrollbar(self.table_container, orient="vertical", command=self.table_canvas.yview)
+        hbar = tk.Scrollbar(self.table_container, orient="horizontal", command=self.table_canvas.xview)
+        self.table_canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
+
+        self.table_canvas.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+        hbar.grid(row=1, column=0, sticky="ew")
+        self.table_container.grid_rowconfigure(0, weight=1)
+        self.table_container.grid_columnconfigure(0, weight=1)
+
+        self.table_inner = tk.Frame(self.table_canvas)
+        self.table = self.table_inner
+        self.table_window = self.table_canvas.create_window((0, 0), window=self.table_inner, anchor="nw")
+
+        def _on_frame_config(event):
+            try:
+                self.table_canvas.configure(scrollregion=self.table_canvas.bbox("all"))
+            except Exception:
+                pass
+
+        def _on_canvas_config(event):
+            try:
+                self.table_canvas.itemconfig(self.table_window, width=event.width)
+            except Exception:
+                pass
+
+        self.table_inner.bind("<Configure>", _on_frame_config)
+        self.table_canvas.bind("<Configure>", _on_canvas_config)
         self._apply_column_layout()
 
     # Row management ------------------------------------------------------
@@ -437,7 +472,7 @@ class ConstraintsTable(tk.Frame):
     def toggle_minimize(self):
         if not self.minimized:
             try:
-                self.table.grid_remove()
+                self.table_container.grid_remove()
             except Exception:
                 pass
             try:
@@ -459,7 +494,7 @@ class ConstraintsTable(tk.Frame):
             self.minimized = True
         else:
             try:
-                self.table.grid()
+                self.table_container.grid()
             except Exception:
                 pass
             try:
