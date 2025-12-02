@@ -3202,7 +3202,9 @@ def save_status(file_path=None, *, update_caption=True):
         Assignation.ENABLE_MAX_ASSIGNMENTS,
         Assignation.MAX_ASSIGNMENTS_PER_POST,
         Assignation.ENABLE_REPOS_SECURITE,
-        stored_pairs
+        stored_pairs,
+        getattr(Assignation, "ENABLE_MAX_WE_DAYS", False),
+        getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None),
     )
 
     try:
@@ -3598,7 +3600,17 @@ def load_status(file_path: str | None = None):
         POST_INFO.update(saved_post_info)
         import Assignation
         assignment_len = len(assignment_options) if isinstance(assignment_options, (list, tuple)) else 0
-        if assignment_len >= 5:
+        Assignation.ENABLE_MAX_WE_DAYS = False
+        Assignation.MAX_WE_DAYS_PER_MONTH = None
+        if assignment_len >= 7:
+            (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
+             Assignation.ENABLE_MAX_ASSIGNMENTS,
+             Assignation.MAX_ASSIGNMENTS_PER_POST,
+             Assignation.ENABLE_REPOS_SECURITE,
+             loaded_pairs,
+             Assignation.ENABLE_MAX_WE_DAYS,
+             Assignation.MAX_WE_DAYS_PER_MONTH) = assignment_options[:7]
+        elif assignment_len >= 5:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
              Assignation.MAX_ASSIGNMENTS_PER_POST,
@@ -3631,6 +3643,13 @@ def load_status(file_path: str | None = None):
         different_post_var.set(Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
         limitation_enabled_var.set(Assignation.ENABLE_MAX_ASSIGNMENTS)
         repos_securite_var.set(Assignation.ENABLE_REPOS_SECURITE)
+        try:
+            max_we_days_enabled_var.set(bool(getattr(Assignation, "ENABLE_MAX_WE_DAYS", False)))
+            if getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None) is not None:
+                max_we_days_value_var.set(int(Assignation.MAX_WE_DAYS_PER_MONTH))
+        except Exception:
+            pass
+        _sync_max_we_menu_state()
 
         # --- NOUVEAU : prÃ©parer un hÃ©ritage des exclusions de la Mois 1 ---
         # Si les semaines >1 n'ont pas d'exclusions enregistrÃ©es, on leur appliquera
@@ -4238,6 +4257,136 @@ if __name__ == '__main__':
     different_post_var = tk.BooleanVar(value=Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
     limitation_enabled_var = tk.BooleanVar(value=Assignation.ENABLE_MAX_ASSIGNMENTS)
     repos_securite_var = tk.BooleanVar(value=Assignation.ENABLE_REPOS_SECURITE)
+    max_we_days_enabled_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_MAX_WE_DAYS", False))
+    _initial_we_limit = getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None)
+    max_we_days_value_var = tk.IntVar(
+        value=_initial_we_limit if _initial_we_limit is not None else 4
+    )
+    set_max_we_entry_idx = None
+
+    def _sync_max_we_menu_state():
+        try:
+            if set_max_we_entry_idx is not None:
+                setup_menu.entryconfig(
+                    set_max_we_entry_idx,
+                    state=("normal" if max_we_days_enabled_var.get() else "disabled"),
+                )
+        except Exception:
+            pass
+        try:
+            Assignation.ENABLE_MAX_WE_DAYS = bool(max_we_days_enabled_var.get())
+            Assignation.MAX_WE_DAYS_PER_MONTH = int(max_we_days_value_var.get())
+        except Exception:
+            Assignation.ENABLE_MAX_WE_DAYS = False
+            Assignation.MAX_WE_DAYS_PER_MONTH = None
+
+    def _on_toggle_max_we_days():
+        _sync_max_we_menu_state()
+
+    def open_max_we_days_dialog():
+        def _center_popup(popup, widget):
+            try:
+                popup.update_idletasks()
+                target = widget or popup.master
+                try:
+                    if target is not None:
+                        target = target.winfo_toplevel()
+                except Exception:
+                    pass
+                if target is None:
+                    return
+                target.update_idletasks()
+                popup_w, popup_h = popup.winfo_width(), popup.winfo_height()
+                if popup_w <= 0 or popup_h <= 0:
+                    return
+                try:
+                    wx, wy = target.winfo_rootx(), target.winfo_rooty()
+                    ww, wh = target.winfo_width(), target.winfo_height()
+                except Exception:
+                    wx = wy = 0
+                    ww, wh = popup.winfo_screenwidth(), popup.winfo_screenheight()
+                if ww <= 0 or wh <= 0:
+                    ww, wh = popup.winfo_screenwidth(), popup.winfo_screenheight()
+                    wx = wy = 0
+                x = wx + (ww - popup_w) // 2
+                y = wy + (wh - popup_h) // 2
+                popup.geometry(f"+{int(x)}+{int(y)}")
+            except Exception:
+                pass
+
+        try:
+            current_val = int(max_we_days_value_var.get())
+        except Exception:
+            current_val = 4
+
+        popup = tk.Toplevel(root)
+        popup.title("Nombre Maximal de Jours de Weekend et Fériés")
+        popup.resizable(False, False)
+        popup.transient(root)
+        popup.grab_set()
+
+        frame = ttk.Frame(popup, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="Fixer la limite par personne (0 = aucune garde autorisée) :",
+            wraplength=320,
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
+        val_var = tk.IntVar(value=current_val)
+        spin = tk.Spinbox(
+            frame,
+            from_=0,
+            to=31,
+            width=5,
+            textvariable=val_var,
+            justify="center",
+        )
+        spin.pack(pady=(0, 10))
+        spin.focus_set()
+
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x")
+
+        result = {"val": None}
+
+        def _confirm():
+            try:
+                result["val"] = max(0, min(31, int(val_var.get())))
+            except Exception:
+                result["val"] = None
+            popup.destroy()
+
+        def _cancel():
+            result["val"] = None
+            popup.destroy()
+
+        ttk.Button(btns, text="OK", width=10, command=_confirm).pack(side="right", padx=(6, 0))
+        ttk.Button(btns, text="Annuler", width=10, command=_cancel).pack(side="right")
+
+        popup.bind("<Return>", lambda e: _confirm())
+        popup.bind("<Escape>", lambda e: _cancel())
+        _center_popup(popup, root)
+        popup.wait_window()
+
+        if result["val"] is None:
+            return
+        max_we_days_value_var.set(int(result["val"]))
+        _sync_max_we_menu_state()
+
+    setup_menu.add_checkbutton(
+        label="Nombre maximal de jours de Weekend et Fériés",
+        variable=max_we_days_enabled_var,
+        command=_on_toggle_max_we_days,
+    )
+    setup_menu.add_command(
+        label="Définir la limite (jours)",
+        command=open_max_we_days_dialog,
+    )
+    set_max_we_entry_idx = setup_menu.index("end")
+    _sync_max_we_menu_state()
     # Fonctions historiques retirées ; menu laissé vide pour éviter tout usage obsolète.
     menu_bar.add_cascade(label="Setup", menu=setup_menu)
     menu_bar.add_command(label="Remplacer nom", command=open_replace_name_dialog)

@@ -22,6 +22,8 @@ ENABLE_MAX_ASSIGNMENTS = True              # Active/dÃ©sactive la limitation p
 MAX_ASSIGNMENTS_PER_POST = 2               # Nombre maximal d'affectations par poste par semaine
 ENABLE_DIFFERENT_POST_PER_DAY = False      # Si True, empÃªche la mÃªme affectation (matin & aprÃ¨s-midi) dans un mÃªme poste
 ENABLE_REPOS_SECURITE = False              # Nouvelle option pour activer le repos de sÃ©curitÃ©
+ENABLE_MAX_WE_DAYS = False                 # Active la limite de jours WE/fériés par personne (mois)
+MAX_WE_DAYS_PER_MONTH = None               # Valeur numérique si ENABLE_MAX_WE_DAYS est True
 
 
 FORBIDDEN_POST_ASSOCIATIONS: Set[Tuple[str, str]] = set()
@@ -84,6 +86,17 @@ def assigner_initiales(constraints_app, planning_gui):
         if val in {"weekends_only", "weekend_only", "weekend"}:
             return "weekends_only"
         return "all"
+
+    try:
+        max_we_enabled = bool(ENABLE_MAX_WE_DAYS)
+    except Exception:
+        max_we_enabled = False
+    try:
+        max_we_limit = int(MAX_WE_DAYS_PER_MONTH) if max_we_enabled and MAX_WE_DAYS_PER_MONTH is not None else None
+        if max_we_limit is not None and max_we_limit < 0:
+            max_we_limit = None
+    except Exception:
+        max_we_limit = None
 
     def _holidays_for(m_year, m_month):
         if _month_holidays:
@@ -223,12 +236,18 @@ def assigner_initiales(constraints_app, planning_gui):
         forbidden_afternoon_to_morning={},
     )
 
-    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type):
+    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type, counts_we_map):
         scope = profile.get("scope", "all")
         if scope == "weekdays_only" and day_type == "we":
             return False
         if scope == "weekends_only" and day_type == "week":
             return False
+        if day_type == "we" and max_we_enabled and max_we_limit is not None:
+            try:
+                if counts_we_map.get(profile["initial"], 0) >= max_we_limit:
+                    return False
+            except Exception:
+                pass
         if day_num in profile["absences"]:
             return False
         if post_name in profile["non_assured"]:
@@ -309,7 +328,7 @@ def assigner_initiales(constraints_app, planning_gui):
             post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
             candidates = []  # (profile, weight)
             for p in profiles:
-                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
+                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype, counts_we):
                     continue
                 cur = count_map[p["initial"]]
                 tgt = target_map.get(p["initial"], 0.0)
