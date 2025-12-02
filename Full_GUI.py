@@ -3786,12 +3786,18 @@ def load_status(file_path: str | None = None):
                             toggle._apply_origin_style()
                         except Exception:
                             pass
-                    elif hasattr(widget, "_var"):
+                    elif hasattr(widget, "_var") and not getattr(widget, "_is_row_action_button", False):
                         val_str = "" if value in (None, "Sélectionner") else str(value)
                         widget._var.set(val_str)
                         widget.config(text=val_str or "Sélectionner")
                     elif isinstance(widget, tk.Button):
                         if getattr(widget, "_is_row_action_button", False):
+                            scope_val = str(value) if value not in (None, "+") else "all"
+                            if hasattr(widget, "_var"):
+                                try:
+                                    widget._var.set(scope_val or "all")
+                                except Exception:
+                                    pass
                             widget.config(text="+")
                         else:
                             # Restaure aussi la variable sous-jacente si elle existe (préférences/absences)

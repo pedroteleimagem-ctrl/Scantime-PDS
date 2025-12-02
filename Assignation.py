@@ -77,6 +77,14 @@ def assigner_initiales(constraints_app, planning_gui):
     def _split_csv(text):
         return [p.strip() for p in str(text or "").replace(";", ",").split(",") if p.strip()]
 
+    def _normalize_scope(raw):
+        val = str(raw or "").strip().lower()
+        if val in {"weekdays_only", "weekday_only", "weekdays"}:
+            return "weekdays_only"
+        if val in {"weekends_only", "weekend_only", "weekend"}:
+            return "weekends_only"
+        return "all"
+
     def _holidays_for(m_year, m_month):
         if _month_holidays:
             try:
@@ -138,10 +146,10 @@ def assigner_initiales(constraints_app, planning_gui):
                 non_txt = ""
         non_assured = set(_split_csv(non_txt))
         try:
-            abs_txt = row[4].var.get()
+            abs_txt = row[5].var.get()
         except Exception:
             try:
-                abs_txt = row[4].cget("text")
+                abs_txt = row[5].cget("text")
             except Exception:
                 abs_txt = ""
         absences = set()
@@ -158,6 +166,18 @@ def assigner_initiales(constraints_app, planning_gui):
             except Exception:
                 continue
 
+        scope_raw = None
+        try:
+            action_btn = row[-1]
+            if getattr(action_btn, "_is_row_action_button", False):
+                if hasattr(action_btn, "_var"):
+                    scope_raw = action_btn._var.get()
+                else:
+                    scope_raw = action_btn.cget("text")
+        except Exception:
+            scope_raw = None
+        scope = _normalize_scope(scope_raw)
+
         profiles.append(
             {
                 "initial": init,
@@ -165,6 +185,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 "preferred": preferred,
                 "non_assured": non_assured,
                 "absences": absences,
+                "scope": scope,
             }
         )
 
@@ -202,7 +223,12 @@ def assigner_initiales(constraints_app, planning_gui):
         forbidden_afternoon_to_morning={},
     )
 
-    def _is_available(profile, day_idx, day_num, post_idx, post_name):
+    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type):
+        scope = profile.get("scope", "all")
+        if scope == "weekdays_only" and day_type == "we":
+            return False
+        if scope == "weekends_only" and day_type == "week":
+            return False
         if day_num in profile["absences"]:
             return False
         if post_name in profile["non_assured"]:
@@ -271,15 +297,19 @@ def assigner_initiales(constraints_app, planning_gui):
     month_week_total = len(cases_week)
     month_we_total = len(cases_we)
 
-    targets_week = {p["initial"]: p["participation"] * month_week_total for p in profiles}
-    targets_we = {p["initial"]: p["participation"] * month_we_total for p in profiles}
+    targets_week = {}
+    targets_we = {}
+    for p in profiles:
+        scope = p.get("scope", "all")
+        targets_week[p["initial"]] = p["participation"] * month_week_total if scope != "weekends_only" else 0
+        targets_we[p["initial"]] = p["participation"] * month_we_total if scope != "weekdays_only" else 0
 
     def _assign_slots(slots, target_map, count_map):
         for (r_idx, c_idx, day_num, dtype) in slots:
             post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
             candidates = []  # (profile, weight)
             for p in profiles:
-                if not _is_available(p, r_idx, day_num, c_idx, post_name):
+                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
                     continue
                 cur = count_map[p["initial"]]
                 tgt = target_map.get(p["initial"], 0.0)

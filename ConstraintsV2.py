@@ -401,8 +401,11 @@ class ConstraintsTable(tk.Frame):
         comment.grid(row=idx, column=6, padx=4, pady=2, sticky="ew")
         entries.append(comment)
 
-        # Bouton d'action (+) en fin de ligne (placeholder)
+        # Bouton d'action (+) en fin de ligne
         action_btn = tk.Button(self.table, text="+", width=3)
+        action_btn._is_row_action_button = True
+        action_btn._var = tk.StringVar(master=self, value="all")
+        action_btn.config(command=lambda b=action_btn: self._open_action_menu(b))
         action_btn.grid(row=idx, column=7, padx=4, pady=2, sticky="e")
         entries.append(action_btn)
 
@@ -455,6 +458,80 @@ class ConstraintsTable(tk.Frame):
         else:
             var.set("")
             btn.config(text="Sélectionner")
+
+    def _find_row_index(self, widget) -> int:
+        for idx, row in enumerate(self.rows):
+            if widget in row:
+                return idx
+        return -1
+
+    def _open_action_menu(self, btn):
+        idx = self._find_row_index(btn)
+        name = ""
+        try:
+            if 0 <= idx < len(self.rows):
+                raw = self.rows[idx][0].get()
+                name = raw.strip()
+        except Exception:
+            name = ""
+        if not name:
+            name = f"Ligne {idx + 1}" if idx >= 0 else "Ligne"
+
+        popup = tk.Toplevel(self)
+        popup.title("Actions")
+        popup.transient(self.winfo_toplevel())
+        popup.resizable(False, False)
+
+        tk.Label(popup, text=name, anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+
+        try:
+            current_scope = btn._var.get()
+        except Exception:
+            current_scope = "all"
+        if not current_scope or current_scope == "+":
+            current_scope = "all"
+        weekdays_only_var = tk.BooleanVar(value=str(current_scope).lower() == "weekdays_only")
+        weekends_only_var = tk.BooleanVar(value=str(current_scope).lower() == "weekends_only")
+
+        def _toggle(which):
+            if which == "weekdays" and weekdays_only_var.get():
+                weekends_only_var.set(False)
+            elif which == "weekends" and weekends_only_var.get():
+                weekdays_only_var.set(False)
+
+        tk.Checkbutton(
+            popup,
+            text="Weekdays only (no weekends/holidays)",
+            variable=weekdays_only_var,
+            anchor="w",
+            command=lambda: _toggle("weekdays"),
+        ).pack(fill="x", padx=28, pady=2)
+
+        tk.Checkbutton(
+            popup,
+            text="Weekends only (no weekdays)",
+            variable=weekends_only_var,
+            anchor="w",
+            command=lambda: _toggle("weekends"),
+        ).pack(fill="x", padx=28, pady=2)
+
+        btn_frame = tk.Frame(popup)
+        btn_frame.pack(pady=12)
+
+        def _apply_and_close():
+            scope = "weekdays_only" if weekdays_only_var.get() else "weekends_only" if weekends_only_var.get() else "all"
+            try:
+                btn._var.set(scope)
+            except Exception:
+                pass
+            popup.destroy()
+
+        tk.Button(btn_frame, text="OK", width=10, command=_apply_and_close).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="Annuler", width=10, command=popup.destroy).pack(side="left", padx=4)
+        popup.bind("<Return>", lambda e: _apply_and_close())
+        popup.bind("<Escape>", lambda e: popup.destroy())
+        popup.grab_set()
+        _center_popup_over_widget(popup, btn)
 
     def _setup_mousewheel(self):
         """Active la molette pour faire défiler le tableau des contraintes."""
