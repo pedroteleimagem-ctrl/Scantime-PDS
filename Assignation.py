@@ -1,4 +1,4 @@
-﻿import random
+import random
 from pathlib import Path
 import sys
 from typing import Dict, Iterable, Set, Tuple
@@ -8,23 +8,22 @@ if str(_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(_MODULE_DIR))
 
 try:
-    from eligibility import AssignmentSettings, PlanningContext, candidate_is_available, parse_constraint_row
+    from eligibility import AssignmentSettings, PlanningContext, candidate_is_available, parse_constraint_row  # noqa: F401
 except ModuleNotFoundError:
     trash_dir = _MODULE_DIR / "trash"
     if trash_dir.is_dir():
         sys.path.insert(0, str(trash_dir))
-    from eligibility import AssignmentSettings, PlanningContext, candidate_is_available, parse_constraint_row  # noqa: E402
+    from eligibility import AssignmentSettings, PlanningContext, candidate_is_available, parse_constraint_row  # type: ignore  # noqa: F401,E402
 
 del _MODULE_DIR
 
-# Variables globales pour la limitation d'affectation et l'option de postes diffÃ©rents dans la mÃªme Journée
-ENABLE_MAX_ASSIGNMENTS = True              # Active/dÃ©sactive la limitation par poste (nombre max par semaine)
-MAX_ASSIGNMENTS_PER_POST = 2               # Nombre maximal d'affectations par poste par semaine
-ENABLE_DIFFERENT_POST_PER_DAY = False      # Si True, empÃªche la mÃªme affectation (matin & aprÃ¨s-midi) dans un mÃªme poste
-ENABLE_REPOS_SECURITE = False              # Nouvelle option pour activer le repos de sÃ©curitÃ©
-ENABLE_MAX_WE_DAYS = False                 # Active la limite de jours WE/fériés par personne (mois)
-MAX_WE_DAYS_PER_MONTH = None               # Valeur numérique si ENABLE_MAX_WE_DAYS est True
-
+# Global toggles inherited from previous version
+ENABLE_MAX_ASSIGNMENTS = False
+MAX_ASSIGNMENTS_PER_POST = None
+ENABLE_DIFFERENT_POST_PER_DAY = False
+ENABLE_REPOS_SECURITE = False
+ENABLE_MAX_WE_DAYS = False
+MAX_WE_DAYS_PER_MONTH = None
 
 FORBIDDEN_POST_ASSOCIATIONS: Set[Tuple[str, str]] = set()
 
@@ -54,13 +53,17 @@ def build_forbidden_maps(work_posts: Iterable[str]) -> Tuple[Dict[int, frozenset
 
 def assigner_initiales(constraints_app, planning_gui):
     """
-    Assigne automatiquement les crénaux du mois en respectant uniquement les contraintes
-    du tableau (participation %, absences, postes non assurés, doublons sur la même journée),
-    avec cibles séparées semaine vs week-end/jours fériés et tirage pondéré.
+    Assigne automatiquement les cr\u00e9neaux du mois poste par poste selon le workflow demand\u00e9 :
+    - parcours chronologique jour + poste,
+    - priorit\u00e9 aux candidats pr\u00e9f\u00e9rentiels,
+    - v\u00e9rification des contraintes (absences, postes interdits, scope semaine/WE, plafond WE global),
+    - gestion des associations de postes : affectation du m\u00eame m\u00e9decin sur les postes associ\u00e9s du jour.
+    Les cibles sont calcul\u00e9es \u00e0 partir du volume annuel (semaine/week-end) divis\u00e9 par 12 et pond\u00e9r\u00e9es
+    par le pourcentage de participation.
     """
     import calendar
     from datetime import date, timedelta
-    from Full_GUI import days, work_posts, extract_names_from_cell
+    from Full_GUI import days, work_posts, extract_names_from_cell, POST_INFO
 
     try:
         from Full_GUI import month_holidays as _month_holidays
@@ -107,7 +110,7 @@ def assigner_initiales(constraints_app, planning_gui):
         return set()
 
     def _day_type(dt, hol_set):
-        """week = lun-jeu non férié, we = ven/sa/di/férié/veille férié."""
+        """week = lun-jeu non feri\u00e9, we = ven/sa/di/feri\u00e9/veille feri\u00e9."""
         is_hol = dt in hol_set
         next_hol = (dt + timedelta(days=1)) in hol_set
         wd = dt.weekday()
@@ -115,7 +118,7 @@ def assigner_initiales(constraints_app, planning_gui):
             return "we"
         return "week"
 
-    # Totaux annuels (même liste de postes toute l'année)
+    # Totaux annuels (m\u00eame liste de postes toute l'ann\u00e9e)
     annual_week = annual_we = 0
     for m_idx in range(1, 13):
         dim = calendar.monthrange(year, m_idx)[1]
@@ -191,6 +194,17 @@ def assigner_initiales(constraints_app, planning_gui):
             scope_raw = None
         scope = _normalize_scope(scope_raw)
 
+        assoc_txt = ""
+        try:
+            assoc_widget = row[4]
+            if hasattr(assoc_widget, "_var"):
+                assoc_txt = assoc_widget._var.get()
+            else:
+                assoc_txt = assoc_widget.cget("text")
+        except Exception:
+            assoc_txt = ""
+        associations = [p for p in _split_csv(assoc_txt)]
+
         profiles.append(
             {
                 "initial": init,
@@ -199,6 +213,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 "non_assured": non_assured,
                 "absences": absences,
                 "scope": scope,
+                "associations": associations,
             }
         )
 
@@ -218,8 +233,6 @@ def assigner_initiales(constraints_app, planning_gui):
             day_num = row_idx + 1
         return 1 <= day_num <= days_in_month, day_num
 
-    from eligibility import PlanningContext, AssignmentSettings
-
     context = PlanningContext(
         table_entries=planning_gui.table_entries,
         name_resolver=lambda raw: extract_names_from_cell(raw, parser_valids),
@@ -227,16 +240,31 @@ def assigner_initiales(constraints_app, planning_gui):
         excluded_cells=excluded_cells,
     )
 
-    settings = AssignmentSettings(
-        enable_max_assignments=False,
-        max_assignments_per_post=None,
-        enable_different_post_per_day=False,
-        enable_repos_securite=False,
-        forbidden_morning_to_afternoon={},
-        forbidden_afternoon_to_morning={},
-    )
+    # Associations par profil et index de poste
+    post_index_map = {name: idx for idx, name in enumerate(work_posts)}
+    profile_assoc_map = {p["initial"]: {} for p in profiles}
 
-    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type, counts_we_map):
+    def _add_assoc_for_profile(initial, a_name, b_name):
+        a_idx = post_index_map.get(a_name)
+        b_idx = post_index_map.get(b_name)
+        if a_idx is None or b_idx is None or a_idx == b_idx:
+            return
+        profile_assoc_map.setdefault(initial, {}).setdefault(a_idx, set()).add(b_idx)
+        profile_assoc_map.setdefault(initial, {}).setdefault(b_idx, set()).add(a_idx)
+
+    for p in profiles:
+        assoc_list = p.get("associations", [])
+        if len(assoc_list) < 2:
+            continue
+        for i in range(len(assoc_list)):
+            for j in range(i + 1, len(assoc_list)):
+                _add_assoc_for_profile(p["initial"], assoc_list[i], assoc_list[j])
+
+    # Comptage des assignations existantes (par jour distinct)
+    counts_week_days = {p["initial"]: set() for p in profiles}
+    counts_we_days = {p["initial"]: set() for p in profiles}
+
+    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type):
         scope = profile.get("scope", "all")
         if scope == "weekdays_only" and day_type == "we":
             return False
@@ -244,10 +272,10 @@ def assigner_initiales(constraints_app, planning_gui):
             return False
         if day_type == "we" and max_we_enabled and max_we_limit is not None:
             try:
-                if counts_we_map.get(profile["initial"], 0) >= max_we_limit:
+                if len(counts_we_days.get(profile["initial"], set())) >= max_we_limit:
                     return False
             except Exception:
-                pass
+                return False
         if day_num in profile["absences"]:
             return False
         if post_name in profile["non_assured"]:
@@ -256,15 +284,12 @@ def assigner_initiales(constraints_app, planning_gui):
             return False
         return True
 
-    # Comptage des assignations existantes (pour pondérer)
-    counts_week = {p["initial"]: 0 for p in profiles}
-    counts_we = {p["initial"]: 0 for p in profiles}
-
     for r_idx, row in enumerate(planning_gui.table_entries):
         in_month, day_num = _in_month(r_idx)
         if not in_month:
             continue
         dtype = _day_type(date(year, month, day_num), hol_month)
+        day_names = set()
         for c_idx, cell in enumerate(row):
             if not cell or c_idx >= len(work_posts):
                 continue
@@ -276,17 +301,17 @@ def assigner_initiales(constraints_app, planning_gui):
                 existing_names = context.name_resolver(cell.get())
             except Exception:
                 existing_names = []
-            for nm in existing_names:
-                if nm not in counts_week:
-                    continue
-                if dtype == "we":
-                    counts_we[nm] += 1
-                else:
-                    counts_week[nm] += 1
+            day_names.update(nm for nm in existing_names if nm in counts_week_days)
+        for nm in day_names:
+            if dtype == "we":
+                counts_we_days[nm].add(r_idx)
+            else:
+                counts_week_days[nm].add(r_idx)
 
-    # Cases à remplir (on ignore les cellules déjà renseignées ou exclues)
-    cases_we = []
-    cases_week = []
+    # Cases a remplir
+    cases = []
+    week_slots = 0
+    we_slots = 0
     for r_idx, row in enumerate(planning_gui.table_entries):
         in_month, day_num = _in_month(r_idx)
         if not in_month:
@@ -304,81 +329,154 @@ def assigner_initiales(constraints_app, planning_gui):
                     continue
             except Exception:
                 continue
-            slot = (r_idx, c_idx, day_num, dtype)
+            cases.append((r_idx, c_idx, day_num, dtype))
             if dtype == "we":
-                cases_we.append(slot)
+                we_slots += 1
             else:
-                cases_week.append(slot)
+                week_slots += 1
 
-    random.shuffle(cases_we)
-    random.shuffle(cases_week)
-
-    month_week_total = len(cases_week)
-    month_we_total = len(cases_we)
-
+    # Cibles mensuelles (volume r\u00e9el du mois)
     targets_week = {}
     targets_we = {}
     for p in profiles:
         scope = p.get("scope", "all")
-        targets_week[p["initial"]] = p["participation"] * month_week_total if scope != "weekends_only" else 0
-        targets_we[p["initial"]] = p["participation"] * month_we_total if scope != "weekdays_only" else 0
+        targets_week[p["initial"]] = (p["participation"] * week_slots) if scope != "weekends_only" else 0.0
+        targets_we[p["initial"]] = (p["participation"] * we_slots) if scope != "weekdays_only" else 0.0
 
-    def _assign_slots(slots, target_map, count_map):
-        for (r_idx, c_idx, day_num, dtype) in slots:
-            post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
-            candidates = []  # (profile, weight)
-            for p in profiles:
-                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype, counts_we):
-                    continue
-                cur = count_map[p["initial"]]
-                tgt = target_map.get(p["initial"], 0.0)
-                deficit = tgt - cur
-                base_w = deficit if deficit > 0 else 0.05  # petite pénalité quand au-dessus de la cible
-                if post_name and post_name in p["preferred"]:
-                    base_w *= 1.35  # bonus de préférence mais limité pour garder l'équilibre
-                candidates.append((p, base_w, deficit))
+    def _update_counts(profile_initial, dtype, day_idx):
+        if dtype == "we":
+            counts_we_days.setdefault(profile_initial, set()).add(day_idx)
+        else:
+            counts_week_days.setdefault(profile_initial, set()).add(day_idx)
 
-            if not candidates:
-                continue
+    def _pick_candidate(candidate_profiles, dtype):
+        """Tirage pondere en fonction du deficit par rapport a la cible du type de jour."""
+        if not candidate_profiles:
+            return None
+        target_map = targets_we if dtype == "we" else targets_week
+        count_map = counts_we_days if dtype == "we" else counts_week_days
+        weighted = []
+        for p in candidate_profiles:
+            cur = len(count_map.get(p["initial"], set()))
+            tgt = target_map.get(p["initial"], 0.0)
+            deficit = tgt - cur
+            weight = deficit if deficit > 0 else 0.1
+            weighted.append((p, max(weight, 1e-6), deficit))
+        positives = [(p, w) for (p, w, d) in weighted if d > 0]
+        if positives:
+            pool = positives
+            total = sum(w for _, w in pool)
+            if total <= 0:
+                return random.choice([p for p, _ in pool])
+            pick = random.random() * total
+            acc = 0.0
+            for p, w in pool:
+                acc += w
+                if pick <= acc:
+                    return p
+            return pool[-1][0]
 
-            # Si quelqu'un a un déficit positif, filtrer pour prioriser ceux encore sous cible.
-            under_target = [(p, w, d) for (p, w, d) in candidates if d > 0]
-            if under_target:
-                candidates = under_target
+        # Aucun d\u00e9ficit positif : on prend ceux avec le plus faible ratio count/target (ou count si target=0)
+        ratios = []
+        for p in candidate_profiles:
+            cur = len(count_map.get(p["initial"], set()))
+            tgt = target_map.get(p["initial"], 0.0)
+            ratio = (cur / tgt) if tgt > 0 else float(cur)
+            ratios.append((p, ratio))
+        min_ratio = min(r for _, r in ratios) if ratios else 0
+        pool = [p for (p, r) in ratios if r == min_ratio]
+        return random.choice(pool) if pool else None
 
-            weights = [max(1e-6, w) for (_, w, _) in candidates]
+    def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype):
+        """Affecte le profil sur (jour, poste) et sur les postes associes eligibles le meme jour."""
+        try:
+            cell = planning_gui.table_entries[r_idx][c_idx]
+            if not cell:
+                return False
+        except Exception:
+            return False
 
-            total_w = sum(weights)
-            if total_w <= 0:
-                chosen = random.choice([p for p, _, _ in candidates])
-            else:
-                pick = random.random() * total_w
-                acc = 0.0
-                chosen = candidates[-1][0]
-                for (p, _, _), w in zip(candidates, weights):
-                    acc += w
-                    if pick <= acc:
-                        chosen = p
-                        break
+        try:
+            cell.delete(0, "end")
+            cell.insert(0, profile["initial"])
+        except Exception:
+            return False
 
+        _update_counts(profile["initial"], dtype, r_idx)
+
+        assoc_indices = profile_assoc_map.get(profile["initial"], {}).get(c_idx, set()) or set()
+        for other_idx in assoc_indices:
             try:
-                cell = planning_gui.table_entries[r_idx][c_idx]
-                cell.delete(0, "end")
-                cell.insert(0, chosen["initial"])
+                other_cell = planning_gui.table_entries[r_idx][other_idx]
             except Exception:
                 continue
-
-            if dtype == "we":
-                counts_we[chosen["initial"]] += 1
-            else:
-                counts_week[chosen["initial"]] += 1
-
-            context.clear_caches()
+            if not other_cell or other_idx >= len(work_posts):
+                continue
+            if not cell_availability.get((r_idx, other_idx), True):
+                continue
+            if exclusion_checker and exclusion_checker(r_idx, other_idx):
+                continue
             try:
-                planning_gui.auto_resize_column(c_idx)
+                if other_cell.get().strip():
+                    continue
+            except Exception:
+                continue
+            other_name = work_posts[other_idx]
+            if not _is_available(profile, r_idx, day_num, other_idx, other_name, dtype):
+                continue
+            try:
+                other_cell.delete(0, "end")
+                other_cell.insert(0, profile["initial"])
+            except Exception:
+                continue
+            _update_counts(profile["initial"], dtype, r_idx)
+            try:
+                planning_gui.auto_resize_column(other_idx)
             except Exception:
                 pass
 
-    # Ordre : week-ends / fériés d'abord, puis semaine
-    _assign_slots(cases_we, targets_we, counts_we)
-    _assign_slots(cases_week, targets_week, counts_week)
+        context.clear_caches()
+        try:
+            planning_gui.auto_resize_column(c_idx)
+        except Exception:
+            pass
+        return True
+
+    # Parcours chronologique : lignes (jours) puis colonnes (postes)
+    cases.sort(key=lambda tpl: (tpl[2], tpl[1]))
+
+    for (r_idx, c_idx, day_num, dtype) in cases:
+        try:
+            current_cell = planning_gui.table_entries[r_idx][c_idx]
+            if not current_cell or current_cell.get().strip():
+                continue
+        except Exception:
+            continue
+
+        post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+
+        pref_candidates = []
+        for p in profiles:
+            if post_name not in p.get("preferred", []):
+                continue
+            if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
+                continue
+            pref_candidates.append(p)
+        random.shuffle(pref_candidates)
+
+        chosen = _pick_candidate(pref_candidates, dtype)
+        if chosen is None:
+            other_candidates = []
+            for p in profiles:
+                if post_name in p.get("preferred", []):
+                    continue
+                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
+                    continue
+                other_candidates.append(p)
+            random.shuffle(other_candidates)
+            chosen = _pick_candidate(other_candidates, dtype)
+
+        if chosen is None:
+            continue
+
+        _assign_profile_to_cell(chosen, r_idx, c_idx, day_num, dtype)
