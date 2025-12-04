@@ -278,6 +278,7 @@ class ConstraintsTable(tk.Frame):
         self.rows = []
         self.work_posts = list(work_posts or [])
         self.minimized = False
+        self.selected_row_index = None
         self.table_container = None
         self.table_canvas = None
         self.table_inner = None
@@ -429,12 +430,16 @@ class ConstraintsTable(tk.Frame):
         entries.append(action_btn)
 
         self.rows.append(entries)
+        self._bind_row_highlight(entries)
+        self._remember_default_row_colors(entries)
         self._apply_column_layout()
 
     def delete_row(self):
         if not self.rows:
             return
         widgets = self.rows.pop()
+        # reset sélection si on supprime la ligne active
+        self.selected_row_index = None
         for w in widgets:
             try:
                 w.destroy()
@@ -520,6 +525,52 @@ class ConstraintsTable(tk.Frame):
             if widget in row:
                 return idx
         return -1
+
+    def _remember_default_row_colors(self, row):
+        for w in row:
+            try:
+                w._default_bg = w.cget("bg")
+            except Exception:
+                w._default_bg = None
+
+    def _bind_row_highlight(self, row):
+        for w in row:
+            try:
+                w.bind("<Button-1>", lambda e, widget=w: self._on_row_click(widget), add="+")
+                w.bind("<FocusIn>", lambda e, widget=w: self._on_row_click(widget), add="+")
+            except Exception:
+                pass
+
+    def _on_row_click(self, widget):
+        idx = self._find_row_index(widget)
+        if idx < 0:
+            return
+        self._highlight_row(idx)
+
+    def _highlight_row(self, idx: int):
+        if self.selected_row_index is not None and 0 <= self.selected_row_index < len(self.rows):
+            self._set_row_bg(self.rows[self.selected_row_index], restore=True)
+        self.selected_row_index = idx
+        if 0 <= idx < len(self.rows):
+            self._set_row_bg(self.rows[idx], restore=False)
+
+    def _set_row_bg(self, row, restore: bool):
+        target_bg = None
+        if restore:
+            # restore couleurs d'origine
+            def _bg_for(w):
+                return getattr(w, "_default_bg", None)
+        else:
+            target_bg = "#e8ecf5"
+            def _bg_for(_w):
+                return target_bg
+        for w in row:
+            try:
+                bg = _bg_for(w)
+                if bg is not None:
+                    w.config(bg=bg)
+            except Exception:
+                pass
 
     def _open_action_menu(self, btn):
         """Le bouton + est conservé mais ses options sont déplacées dans 'Exclusions'."""
