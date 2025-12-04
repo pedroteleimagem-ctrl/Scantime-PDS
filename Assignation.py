@@ -185,14 +185,27 @@ def assigner_initiales(constraints_app, planning_gui):
 
         scope_raw = None
         try:
-            action_btn = row[-1]
-            if getattr(action_btn, "_is_row_action_button", False):
-                if hasattr(action_btn, "_var"):
-                    scope_raw = action_btn._var.get()
-                else:
-                    scope_raw = action_btn.cget("text")
+            exclusion_btn = next((w for w in row if getattr(w, "_is_exclusion_button", False)), None)
         except Exception:
-            scope_raw = None
+            exclusion_btn = None
+        if exclusion_btn is not None:
+            try:
+                scope_raw = exclusion_btn._var.get()
+            except Exception:
+                try:
+                    scope_raw = exclusion_btn.cget("text")
+                except Exception:
+                    scope_raw = None
+        if scope_raw is None:
+            try:
+                action_btn = row[-1]
+                if getattr(action_btn, "_is_row_action_button", False):
+                    if hasattr(action_btn, "_var"):
+                        scope_raw = action_btn._var.get()
+                    else:
+                        scope_raw = action_btn.cget("text")
+            except Exception:
+                scope_raw = None
         scope = _normalize_scope(scope_raw)
 
         assoc_txt = ""

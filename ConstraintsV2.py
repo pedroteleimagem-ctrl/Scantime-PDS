@@ -11,6 +11,7 @@ COLUMNS = [
     "Lignes non assurées",
     "Associations",
     "Absences (jours du mois)",
+    "Exclusions",
     "Commentaire",
 ]
 
@@ -265,7 +266,12 @@ class MultiDayPopup(tk.Toplevel):
 class ConstraintsTable(tk.Frame):
     """Tableau de contraintes simplifié (mensuel)."""
 
-    MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 170, 200, 60]
+    MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 170, 140, 200, 60]
+    EXCLUSION_STATES = [
+        ("Aucune exclusion", "all"),
+        ("Semaine uniquement", "weekdays_only"),
+        ("WE/fériés uniquement", "weekends_only"),
+    ]
 
     def __init__(self, master=None, work_posts=None, planning_gui=None):
         super().__init__(master)
@@ -400,9 +406,18 @@ class ConstraintsTable(tk.Frame):
         abs_btn.var = abs_var
         entries.append(abs_btn)
 
-        # Commentaire
+        # Exclusions (cycle semaine / WE)
+        exclusion_btn = tk.Button(self.table, width=16, font=("Arial", 9))
+        exclusion_btn._var = tk.StringVar(master=self, value="all")
+        exclusion_btn._is_exclusion_button = True
+        self._update_exclusion_button(exclusion_btn)
+        exclusion_btn.config(command=lambda b=exclusion_btn: self._cycle_exclusion_state(b))
+        exclusion_btn.grid(row=idx, column=6, padx=4, pady=2, sticky="ew")
+        entries.append(exclusion_btn)
+
+        # Commentaire (dernière colonne visible)
         comment = tk.Entry(self.table, width=20)
-        comment.grid(row=idx, column=6, padx=4, pady=2, sticky="ew")
+        comment.grid(row=idx, column=7, padx=4, pady=2, sticky="ew")
         entries.append(comment)
 
         # Bouton d'action (+) en fin de ligne
@@ -410,7 +425,7 @@ class ConstraintsTable(tk.Frame):
         action_btn._is_row_action_button = True
         action_btn._var = tk.StringVar(master=self, value="all")
         action_btn.config(command=lambda b=action_btn: self._open_action_menu(b))
-        action_btn.grid(row=idx, column=7, padx=4, pady=2, sticky="e")
+        action_btn.grid(row=idx, column=8, padx=4, pady=2, sticky="e")
         entries.append(action_btn)
 
         self.rows.append(entries)
@@ -463,6 +478,43 @@ class ConstraintsTable(tk.Frame):
             var.set("")
             btn.config(text="Sélectionner")
 
+    def _cycle_exclusion_state(self, btn: tk.Button):
+        """Fait tourner la valeur d'exclusion semaine/WE."""
+        states = [state for _label, state in self.EXCLUSION_STATES]
+        try:
+            current = btn._var.get()
+        except Exception:
+            current = "all"
+        try:
+            idx = states.index(current)
+        except ValueError:
+            idx = 0
+        next_state = states[(idx + 1) % len(states)]
+        try:
+            btn._var.set(next_state)
+        except Exception:
+            pass
+        self._update_exclusion_button(btn)
+
+    def _update_exclusion_button(self, btn: tk.Button):
+        """Met à jour le libellé du bouton d'exclusion."""
+        try:
+            current = btn._var.get()
+        except Exception:
+            current = "all"
+        label = None
+        for lbl, state in self.EXCLUSION_STATES:
+            if state == current:
+                label = lbl
+                break
+        if label is None:
+            label = self.EXCLUSION_STATES[0][0]
+            try:
+                btn._var.set(self.EXCLUSION_STATES[0][1])
+            except Exception:
+                pass
+        btn.config(text=label)
+
     def _find_row_index(self, widget) -> int:
         for idx, row in enumerate(self.rows):
             if widget in row:
@@ -470,72 +522,15 @@ class ConstraintsTable(tk.Frame):
         return -1
 
     def _open_action_menu(self, btn):
-        idx = self._find_row_index(btn)
-        name = ""
+        """Le bouton + est conservé mais ses options sont déplacées dans 'Exclusions'."""
         try:
-            if 0 <= idx < len(self.rows):
-                raw = self.rows[idx][0].get()
-                name = raw.strip()
+            btn._var.set("all")
         except Exception:
-            name = ""
-        if not name:
-            name = f"Ligne {idx + 1}" if idx >= 0 else "Ligne"
-
-        popup = tk.Toplevel(self)
-        popup.title("Actions")
-        popup.transient(self.winfo_toplevel())
-        popup.resizable(False, False)
-
-        tk.Label(popup, text=name, anchor="w").pack(fill="x", padx=12, pady=(12, 6))
-
-        try:
-            current_scope = btn._var.get()
-        except Exception:
-            current_scope = "all"
-        if not current_scope or current_scope == "+":
-            current_scope = "all"
-        weekdays_only_var = tk.BooleanVar(value=str(current_scope).lower() == "weekdays_only")
-        weekends_only_var = tk.BooleanVar(value=str(current_scope).lower() == "weekends_only")
-
-        def _toggle(which):
-            if which == "weekdays" and weekdays_only_var.get():
-                weekends_only_var.set(False)
-            elif which == "weekends" and weekends_only_var.get():
-                weekdays_only_var.set(False)
-
-        tk.Checkbutton(
-            popup,
-            text="Weekdays only (no weekends/holidays)",
-            variable=weekdays_only_var,
-            anchor="w",
-            command=lambda: _toggle("weekdays"),
-        ).pack(fill="x", padx=28, pady=2)
-
-        tk.Checkbutton(
-            popup,
-            text="Weekends only (no weekdays)",
-            variable=weekends_only_var,
-            anchor="w",
-            command=lambda: _toggle("weekends"),
-        ).pack(fill="x", padx=28, pady=2)
-
-        btn_frame = tk.Frame(popup)
-        btn_frame.pack(pady=12)
-
-        def _apply_and_close():
-            scope = "weekdays_only" if weekdays_only_var.get() else "weekends_only" if weekends_only_var.get() else "all"
-            try:
-                btn._var.set(scope)
-            except Exception:
-                pass
-            popup.destroy()
-
-        tk.Button(btn_frame, text="OK", width=10, command=_apply_and_close).pack(side="left", padx=4)
-        tk.Button(btn_frame, text="Annuler", width=10, command=popup.destroy).pack(side="left", padx=4)
-        popup.bind("<Return>", lambda e: _apply_and_close())
-        popup.bind("<Escape>", lambda e: popup.destroy())
-        popup.grab_set()
-        _center_popup_over_widget(popup, btn)
+            pass
+        messagebox.showinfo(
+            "Actions",
+            "Les options ont été déplacées dans la colonne 'Exclusions'."
+        )
 
     def _setup_mousewheel(self):
         """Active la molette pour faire défiler le tableau des contraintes."""
@@ -666,9 +661,13 @@ class ConstraintsTable(tk.Frame):
             assoc = getattr(row[4], "_var", tk.StringVar(value="")).get() if hasattr(row[4], "_var") else ""
             abs_days = getattr(row[5], "var", tk.StringVar(value="")).get()
             try:
-                comment = row[6].get().strip()
+                comment = row[7].get().strip()
             except Exception:
                 comment = ""
+            try:
+                exclusion_scope = row[6]._var.get() if getattr(row[6], "_is_exclusion_button", False) else "all"
+            except Exception:
+                exclusion_scope = "all"
             data.append({
                 "initiales": initials,
                 "participation": part_val or "100",
@@ -677,6 +676,8 @@ class ConstraintsTable(tk.Frame):
                 "associations": assoc,
                 "absences": abs_days,
                 "commentaire": comment,
+                "exclusions": exclusion_scope,
+                "scope": exclusion_scope,
             })
         return data
 
@@ -704,7 +705,14 @@ class ConstraintsTable(tk.Frame):
                 row[4].config(text=row[4]._var.get() or "Sélectionner")
             row[5].var.set(row_dict.get("absences", ""))
             row[5].config(text=row[5].var.get() or "Sélectionner")
-            row[6].insert(0, row_dict.get("commentaire", ""))
+            try:
+                exclusion_val = row_dict.get("exclusions", row_dict.get("scope", "all"))
+                if getattr(row[6], "_is_exclusion_button", False):
+                    row[6]._var.set(exclusion_val or "all")
+                    self._update_exclusion_button(row[6])
+            except Exception:
+                pass
+            row[7].insert(0, row_dict.get("commentaire", ""))
 
     def refresh_work_posts(self, new_posts):
         """Met à jour la liste des postes utilisable pour préf/non assurées/associations."""
@@ -729,7 +737,7 @@ class ConstraintsTable(tk.Frame):
             except Exception:
                 pass
             try:
-                self.table.grid_columnconfigure(idx, weight=1, minsize=minsize)
+                self.table.grid_columnconfigure(idx, weight=1 if idx < len(COLUMNS) else 0, minsize=minsize)
             except Exception:
                 pass
 

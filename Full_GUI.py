@@ -3825,6 +3825,20 @@ def load_status(file_path: str | None = None):
                             toggle._apply_origin_style()
                         except Exception:
                             pass
+                    elif getattr(widget, "_is_exclusion_button", False):
+                        scope_val = "" if value in (None, "+") else str(value)
+                        try:
+                            widget._var.set(scope_val or "all")
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(c, "_update_exclusion_button"):
+                                c._update_exclusion_button(widget)
+                        except Exception:
+                            try:
+                                widget.config(text=scope_val or "Aucune exclusion")
+                            except Exception:
+                                pass
                     elif hasattr(widget, "_var") and not getattr(widget, "_is_row_action_button", False):
                         val_str = "" if value in (None, "Sélectionner") else str(value)
                         widget._var.set(val_str)
