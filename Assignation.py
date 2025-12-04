@@ -24,6 +24,7 @@ ENABLE_DIFFERENT_POST_PER_DAY = False
 ENABLE_REPOS_SECURITE = False
 ENABLE_MAX_WE_DAYS = False
 MAX_WE_DAYS_PER_MONTH = None
+ENABLE_WEEKEND_BLOCKS = False
 
 FORBIDDEN_POST_ASSOCIATIONS: Set[Tuple[str, str]] = set()
 
@@ -235,6 +236,15 @@ def assigner_initiales(constraints_app, planning_gui):
             day_num = row_idx + 1
         return 1 <= day_num <= days_in_month, day_num
 
+    # Map jour (num) -> index de ligne dans le tableau
+    day_to_row = {}
+    for idx, val in enumerate(days):
+        try:
+            num = int(val)
+        except Exception:
+            num = idx + 1
+        day_to_row[num] = idx
+
     context = PlanningContext(
         table_entries=planning_gui.table_entries,
         name_resolver=lambda raw: extract_names_from_cell(raw, parser_valids),
@@ -351,6 +361,25 @@ def assigner_initiales(constraints_app, planning_gui):
         else:
             counts_week_days.setdefault(profile_initial, set()).add(day_idx)
 
+    def _weekend_block_days(day_num):
+        """
+        Retourne les jours (numériques) d'un bloc week-end (ven-sam-dim) englobant day_num.
+        On reste dans le mois courant.
+        """
+        try:
+            dt = date(year, month, day_num)
+        except Exception:
+            return []
+        # Vendredi = 4
+        offset = max(0, dt.weekday() - 4)
+        start = dt - timedelta(days=offset)
+        result = []
+        for i in range(3):
+            d = start + timedelta(days=i)
+            if d.month == month:
+                result.append(d.day)
+        return result
+
     def _pick_candidate(candidate_profiles, dtype):
         """Tirage pondere en fonction du deficit par rapport a la cible du type de jour."""
         if not candidate_profiles:
@@ -389,7 +418,7 @@ def assigner_initiales(constraints_app, planning_gui):
         pool = [p for (p, r) in ratios if r == min_ratio]
         return random.choice(pool) if pool else None
 
-    def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype):
+    def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype, allow_weekend_block=True):
         """Affecte le profil sur (jour, poste) et sur les postes associes eligibles le meme jour."""
         try:
             cell = planning_gui.table_entries[r_idx][c_idx]
@@ -436,6 +465,26 @@ def assigner_initiales(constraints_app, planning_gui):
                 planning_gui.auto_resize_column(other_idx)
             except Exception:
                 pass
+
+        # Bloc week-end : remplir le m\u00eame poste sur ven/sam/dim du bloc si l'option est activ\u00e9e
+        if allow_weekend_block and dtype == "we" and ENABLE_WEEKEND_BLOCKS:
+            for other_day_num in _weekend_block_days(day_num):
+                other_r_idx = day_to_row.get(other_day_num)
+                if other_r_idx is None or other_r_idx == r_idx:
+                    continue
+                other_dtype = _day_type(date(year, month, other_day_num), hol_month)
+                if other_dtype != "we":
+                    continue
+                try:
+                    other_cell = planning_gui.table_entries[other_r_idx][c_idx]
+                    if not other_cell or other_cell.get().strip():
+                        continue
+                except Exception:
+                    continue
+                other_post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+                if not _is_available(profile, other_r_idx, other_day_num, c_idx, other_post_name, other_dtype):
+                    continue
+                _assign_profile_to_cell(profile, other_r_idx, c_idx, other_day_num, other_dtype, allow_weekend_block=False)
 
         context.clear_caches()
         try:

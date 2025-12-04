@@ -3215,6 +3215,7 @@ def save_status(file_path=None, *, update_caption=True):
         stored_pairs,
         getattr(Assignation, "ENABLE_MAX_WE_DAYS", False),
         getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None),
+        getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False),
     )
 
     try:
@@ -3612,7 +3613,16 @@ def load_status(file_path: str | None = None):
         assignment_len = len(assignment_options) if isinstance(assignment_options, (list, tuple)) else 0
         Assignation.ENABLE_MAX_WE_DAYS = False
         Assignation.MAX_WE_DAYS_PER_MONTH = None
-        if assignment_len >= 7:
+        if assignment_len >= 8:
+            (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
+             Assignation.ENABLE_MAX_ASSIGNMENTS,
+             Assignation.MAX_ASSIGNMENTS_PER_POST,
+             Assignation.ENABLE_REPOS_SECURITE,
+             loaded_pairs,
+             Assignation.ENABLE_MAX_WE_DAYS,
+             Assignation.MAX_WE_DAYS_PER_MONTH,
+             Assignation.ENABLE_WEEKEND_BLOCKS) = assignment_options[:8]
+        elif assignment_len >= 7:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
              Assignation.MAX_ASSIGNMENTS_PER_POST,
@@ -4267,6 +4277,7 @@ if __name__ == '__main__':
     different_post_var = tk.BooleanVar(value=Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
     limitation_enabled_var = tk.BooleanVar(value=Assignation.ENABLE_MAX_ASSIGNMENTS)
     repos_securite_var = tk.BooleanVar(value=Assignation.ENABLE_REPOS_SECURITE)
+    weekend_block_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False))
     max_we_days_enabled_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_MAX_WE_DAYS", False))
     _initial_we_limit = getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None)
     max_we_days_value_var = tk.IntVar(
@@ -4292,6 +4303,12 @@ if __name__ == '__main__':
 
     def _on_toggle_max_we_days():
         _sync_max_we_menu_state()
+
+    def _on_toggle_weekend_block():
+        try:
+            Assignation.ENABLE_WEEKEND_BLOCKS = bool(weekend_block_var.get())
+        except Exception:
+            Assignation.ENABLE_WEEKEND_BLOCKS = False
 
     def open_max_we_days_dialog():
         def _center_popup(popup, widget):
@@ -4390,6 +4407,11 @@ if __name__ == '__main__':
         label="Nombre maximal de jours de Weekend et Fériés",
         variable=max_we_days_enabled_var,
         command=_on_toggle_max_we_days,
+    )
+    setup_menu.add_checkbutton(
+        label="Affecter les week-ends en bloc (ven-sam-dim)",
+        variable=weekend_block_var,
+        command=_on_toggle_weekend_block,
     )
     setup_menu.add_command(
         label="Définir la limite (jours)",
