@@ -1,4 +1,4 @@
-import random
+﻿import random
 from pathlib import Path
 import sys
 from typing import Dict, Iterable, Set, Tuple
@@ -316,14 +316,14 @@ def assigner_initiales(constraints_app, planning_gui):
             day_names.update(nm for nm in existing_names if nm in counts_week_days)
         for nm in day_names:
             if dtype == "we":
-                counts_we_days[nm].add(r_idx)
+                counts_we_days[nm].add(day_num)
             else:
-                counts_week_days[nm].add(r_idx)
+                counts_week_days[nm].add(day_num)
 
     # Cases a remplir
     cases = []
-    week_slots = 0
-    we_slots = 0
+    open_week_days = set()
+    open_we_days = set()
     for r_idx, row in enumerate(planning_gui.table_entries):
         in_month, day_num = _in_month(r_idx)
         if not in_month:
@@ -343,23 +343,25 @@ def assigner_initiales(constraints_app, planning_gui):
                 continue
             cases.append((r_idx, c_idx, day_num, dtype))
             if dtype == "we":
-                we_slots += 1
+                open_we_days.add(day_num)
             else:
-                week_slots += 1
+                open_week_days.add(day_num)
 
-    # Cibles mensuelles (volume r\u00e9el du mois)
+    # Cibles mensuelles (volume reel du mois) mesurees en jours
     targets_week = {}
     targets_we = {}
+    week_day_count = len(open_week_days)
+    we_day_count = len(open_we_days)
     for p in profiles:
         scope = p.get("scope", "all")
-        targets_week[p["initial"]] = (p["participation"] * week_slots) if scope != "weekends_only" else 0.0
-        targets_we[p["initial"]] = (p["participation"] * we_slots) if scope != "weekdays_only" else 0.0
+        targets_week[p["initial"]] = (p["participation"] * week_day_count) if scope != "weekends_only" else 0.0
+        targets_we[p["initial"]] = (p["participation"] * we_day_count) if scope != "weekdays_only" else 0.0
 
-    def _update_counts(profile_initial, dtype, day_idx):
+    def _update_counts(profile_initial, dtype, day_num):
         if dtype == "we":
-            counts_we_days.setdefault(profile_initial, set()).add(day_idx)
+            counts_we_days.setdefault(profile_initial, set()).add(day_num)
         else:
-            counts_week_days.setdefault(profile_initial, set()).add(day_idx)
+            counts_week_days.setdefault(profile_initial, set()).add(day_num)
 
     def _weekend_block_days(day_num):
         """
@@ -380,43 +382,39 @@ def assigner_initiales(constraints_app, planning_gui):
                 result.append(d.day)
         return result
 
-    def _pick_candidate(candidate_profiles, dtype):
-        """Tirage pondere en fonction du deficit par rapport a la cible du type de jour."""
-        if not candidate_profiles:
+    def _pick_candidate(candidate_entries, dtype):
+        """
+        Selection equilibree sur ratio count/target pour le type de jour.
+        Tie-break : deficit le plus eleve puis un leger alea pour eviter tout biais d'ordre.
+        Applique un bonus pour les preferes et un malus pour les ratios deja > 1.
+        """
+        if not candidate_entries:
             return None
         target_map = targets_we if dtype == "we" else targets_week
         count_map = counts_we_days if dtype == "we" else counts_week_days
-        weighted = []
-        for p in candidate_profiles:
-            cur = len(count_map.get(p["initial"], set()))
-            tgt = target_map.get(p["initial"], 0.0)
-            deficit = tgt - cur
-            weight = deficit if deficit > 0 else 0.1
-            weighted.append((p, max(weight, 1e-6), deficit))
-        positives = [(p, w) for (p, w, d) in weighted if d > 0]
-        if positives:
-            pool = positives
-            total = sum(w for _, w in pool)
-            if total <= 0:
-                return random.choice([p for p, _ in pool])
-            pick = random.random() * total
-            acc = 0.0
-            for p, w in pool:
-                acc += w
-                if pick <= acc:
-                    return p
-            return pool[-1][0]
+        PREF_BONUS = 0.15  # reduit artificiellement le ratio pour les preferes
+        OVER_PENALTY = 0.35  # augmente le ratio si deja au-dessus de la cible
 
-        # Aucun d\u00e9ficit positif : on prend ceux avec le plus faible ratio count/target (ou count si target=0)
-        ratios = []
-        for p in candidate_profiles:
+        scored = []
+        for p, is_pref in candidate_entries:
             cur = len(count_map.get(p["initial"], set()))
             tgt = target_map.get(p["initial"], 0.0)
-            ratio = (cur / tgt) if tgt > 0 else float(cur)
-            ratios.append((p, ratio))
-        min_ratio = min(r for _, r in ratios) if ratios else 0
-        pool = [p for (p, r) in ratios if r == min_ratio]
-        return random.choice(pool) if pool else None
+            if tgt <= 0:
+                continue
+            ratio = cur / tgt
+            over = max(0.0, ratio - 1.0)
+            effective_ratio = ratio + OVER_PENALTY * over
+            if is_pref:
+                effective_ratio = max(0.0, effective_ratio - PREF_BONUS)
+            deficit = tgt - cur
+            jitter = random.random()
+            scored.append((effective_ratio, deficit, jitter, p))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda x: (x[0], -x[1], x[2]))
+        return scored[0][3]
 
     def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype, allow_weekend_block=True):
         """Affecte le profil sur (jour, poste) et sur les postes associes eligibles le meme jour."""
@@ -433,7 +431,7 @@ def assigner_initiales(constraints_app, planning_gui):
         except Exception:
             return False
 
-        _update_counts(profile["initial"], dtype, r_idx)
+        _update_counts(profile["initial"], dtype, day_num)
 
         assoc_indices = profile_assoc_map.get(profile["initial"], {}).get(c_idx, set()) or set()
         for other_idx in assoc_indices:
@@ -460,7 +458,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 other_cell.insert(0, profile["initial"])
             except Exception:
                 continue
-            _update_counts(profile["initial"], dtype, r_idx)
+            _update_counts(profile["initial"], dtype, day_num)
             try:
                 planning_gui.auto_resize_column(other_idx)
             except Exception:
@@ -506,26 +504,15 @@ def assigner_initiales(constraints_app, planning_gui):
 
         post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
 
-        pref_candidates = []
+        candidate_entries = []
         for p in profiles:
-            if post_name not in p.get("preferred", []):
-                continue
             if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
                 continue
-            pref_candidates.append(p)
-        random.shuffle(pref_candidates)
+            candidate_entries.append((p, post_name in p.get("preferred", [])))
 
-        chosen = _pick_candidate(pref_candidates, dtype)
-        if chosen is None:
-            other_candidates = []
-            for p in profiles:
-                if post_name in p.get("preferred", []):
-                    continue
-                if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
-                    continue
-                other_candidates.append(p)
-            random.shuffle(other_candidates)
-            chosen = _pick_candidate(other_candidates, dtype)
+        random.shuffle(candidate_entries)  # melange a chaque case pour casser les biais d'ordre
+
+        chosen = _pick_candidate(candidate_entries, dtype)
 
         if chosen is None:
             continue
