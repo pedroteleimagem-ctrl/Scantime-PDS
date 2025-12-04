@@ -1051,9 +1051,17 @@ class ShiftCountTable(tk.Frame):
             return "week"
 
         def collect_counts(gui_obj):
+            """
+            Retourne un d�compte par personne, en comptant 1 fois par jour (et non par ligne)
+            pour �viter de sur-compter les jours multi-lignes. Les cellules exclues sont ignor�es.
+            """
             excl = getattr(gui_obj, 'excluded_from_count', set())
             counts = {}
             for r, row in enumerate(gui_obj.table_entries):
+                day_type = _day_type(gui_obj, r)
+                if day_type is None:
+                    continue
+                names_in_day = set()
                 for c, cell in enumerate(row):
                     if not cell or (r, c) in excl:
                         continue
@@ -1064,12 +1072,14 @@ class ShiftCountTable(tk.Frame):
                     names = extract_names_from_cell(raw_value, valid_initials)
                     if not names:
                         continue
-                    day_type = _day_type(gui_obj, r)
-                    if day_type is None:
-                        continue
                     for person in names:
-                        bucket = counts.setdefault(person, {"week": 0, "we": 0})
-                        bucket[day_type] = bucket.get(day_type, 0) + 1
+                        if person in valid_initials:
+                            names_in_day.add(person)
+                if not names_in_day:
+                    continue
+                for person in names_in_day:
+                    bucket = counts.setdefault(person, {"week": 0, "we": 0})
+                    bucket[day_type] = bucket.get(day_type, 0) + 1
             return counts
 
         current_counts = collect_counts(self.planning_gui)
@@ -4925,6 +4935,17 @@ if __name__ == '__main__':
             new_gui.apply_month_selection(target_year, target_month)
         except Exception:
             new_gui.schedule_update_colors()
+
+        # Recopie du tableau de contraintes depuis le 1er onglet
+        try:
+            if new_constraints is not None and tabs_data and len(tabs_data[0]) >= 2:
+                source_constraints = tabs_data[0][1]
+                if source_constraints is not None and hasattr(source_constraints, "get_rows_data"):
+                    rows_data = source_constraints.get_rows_data()
+                    if hasattr(new_constraints, "set_rows_data"):
+                        new_constraints.set_rows_data(rows_data)
+        except Exception:
+            pass
 
         new_gui.update_colors(None)
         try:
