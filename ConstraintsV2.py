@@ -572,6 +572,25 @@ class ConstraintsTable(tk.Frame):
             except Exception:
                 pass
 
+    def _move_row_in_place(self, idx: int, direction: int) -> int:
+        """Déplace une ligne sans re-générer tout le tableau."""
+        if direction not in (-1, 1):
+            return idx
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(self.rows):
+            return idx
+        self.rows[idx], self.rows[new_idx] = self.rows[new_idx], self.rows[idx]
+        self._regrid_row(self.rows[idx], idx)
+        self._regrid_row(self.rows[new_idx], new_idx)
+        return new_idx
+
+    def _regrid_row(self, row_widgets, row_index: int):
+        for col, widget in enumerate(row_widgets):
+            try:
+                widget.grid_configure(row=row_index, column=col)
+            except Exception:
+                pass
+
     def _apply_rows_to_all_weeks(self, rows_data):
         """Recopie les données de contraintes sur les autres onglets si disponibles."""
         try:
@@ -624,20 +643,37 @@ class ConstraintsTable(tk.Frame):
             anchor="w"
         ).pack(fill="x", padx=20, pady=2)
 
-        def _apply_and_close():
+        def _apply_action():
             target_idx = self._find_row_index(btn)
             if target_idx < 0:
                 popup.destroy()
                 return
+            # Cas simple : uniquement move up/down (sans delete/dup/propagation)
+            move_only = not delete_var.get() and not dup_var.get() and (up_var.get() != down_var.get()) and not apply_all_var.get()
+            if move_only:
+                direction = -1 if up_var.get() else 1
+                new_idx = self._move_row_in_place(target_idx, direction)
+                self._highlight_row(new_idx)
+                try:
+                    popup.lift()
+                except Exception:
+                    pass
+                return
+
+            # Sinon : on repasse par les données pour gérer delete/dup/propagation
             rows_data = self.get_rows_data()
             if not rows_data:
                 rows_data = [{}]
+            should_close = False
 
             if delete_var.get():
                 if 0 <= target_idx < len(rows_data):
                     rows_data.pop(target_idx)
                 if not rows_data:
                     rows_data = [{}]
+                if target_idx >= len(rows_data):
+                    target_idx = len(rows_data) - 1
+                should_close = True  # la ligne source n'existe plus
             else:
                 if dup_var.get() and 0 <= target_idx < len(rows_data):
                     rows_data.insert(target_idx + 1, dict(rows_data[target_idx]))
@@ -655,10 +691,16 @@ class ConstraintsTable(tk.Frame):
             if apply_all_var.get():
                 self._apply_rows_to_all_weeks(rows_data)
 
-            popup.destroy()
+            if should_close:
+                popup.destroy()
+            else:
+                try:
+                    popup.lift()
+                except Exception:
+                    pass
 
-        tk.Button(popup, text="OK", width=10, command=_apply_and_close).pack(pady=10)
-        popup.bind("<Return>", lambda e: _apply_and_close())
+        tk.Button(popup, text="OK", width=10, command=_apply_action).pack(pady=10)
+        popup.bind("<Return>", lambda e: _apply_action())
         popup.bind("<Escape>", lambda e: popup.destroy())
         popup.grab_set()
         _center_popup_over_widget(popup, btn)
