@@ -219,6 +219,8 @@ def assigner_initiales(constraints_app, planning_gui):
 
     if not profiles:
         return
+    # Casse l'ordre des lignes du tableau de contraintes pour éviter un biais de sélection
+    random.shuffle(profiles)
 
     parser_valids = initials_set
     exclusion_checker = getattr(planning_gui, "is_cell_excluded_from_count", None)
@@ -442,8 +444,8 @@ def assigner_initiales(constraints_app, planning_gui):
             pass
         return True
 
-    # Parcours chronologique : lignes (jours) puis colonnes (postes)
-    cases.sort(key=lambda tpl: (tpl[2], tpl[1]))
+    # Parcours aléatoire des cases pour limiter les biais d'ordre (jour/colonne)
+    random.shuffle(cases)
 
     for (r_idx, c_idx, day_num, dtype) in cases:
         try:
