@@ -228,7 +228,11 @@ class MultiDayPopup(tk.Toplevel):
                         new_sel.add(d)
                 self.selected = new_sel
         else:
-            self.selected = set(rng)
+            # Toggle simple sur clic (sans shift/ctrl) : si on clique un seul jour existant, on l'enlève s'il était déjà sélectionné
+            if len(rng) == 1 and day in self.selected:
+                self.selected.remove(day)
+            else:
+                self.selected = set(rng)
         self._drag_start = None
         self._last_click_day = day
         self._preview = set()
