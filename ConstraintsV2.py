@@ -572,16 +572,96 @@ class ConstraintsTable(tk.Frame):
             except Exception:
                 pass
 
-    def _open_action_menu(self, btn):
-        """Le bouton + est conservé mais ses options sont déplacées dans 'Exclusions'."""
+    def _apply_rows_to_all_weeks(self, rows_data):
+        """Recopie les données de contraintes sur les autres onglets si disponibles."""
         try:
-            btn._var.set("all")
+            import Full_GUI  # import tardif pour éviter les cycles
+            tabs_data = getattr(Full_GUI, "tabs_data", []) or []
         except Exception:
-            pass
-        messagebox.showinfo(
-            "Actions",
-            "Les options ont été déplacées dans la colonne 'Exclusions'."
-        )
+            tabs_data = []
+        for _gui, constraints_app, _shift in tabs_data:
+            if constraints_app is None or constraints_app is self:
+                continue
+            try:
+                if hasattr(constraints_app, "set_rows_data"):
+                    constraints_app.set_rows_data(rows_data)
+            except Exception:
+                continue
+
+    def _open_action_menu(self, btn):
+        idx = self._find_row_index(btn)
+        name = ""
+        try:
+            if 0 <= idx < len(self.rows):
+                raw = self.rows[idx][0].get()
+                name = raw.strip()
+        except Exception:
+            name = ""
+        if not name:
+            name = f"Ligne {idx + 1}" if idx >= 0 else "Ligne"
+
+        popup = tk.Toplevel(self)
+        popup.title("Row actions")
+        popup.transient(self.winfo_toplevel())
+        popup.resizable(False, False)
+
+        tk.Label(popup, text=f"Ligne : {name}", anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+
+        delete_var = tk.BooleanVar(value=False)
+        dup_var = tk.BooleanVar(value=False)
+        up_var = tk.BooleanVar(value=False)
+        down_var = tk.BooleanVar(value=False)
+        apply_all_var = tk.BooleanVar(value=False)
+
+        tk.Checkbutton(popup, text="Delete this row?", variable=delete_var, anchor="w").pack(fill="x", padx=20, pady=2)
+        tk.Checkbutton(popup, text="Duplicate this row?", variable=dup_var, anchor="w").pack(fill="x", padx=20, pady=2)
+        tk.Checkbutton(popup, text="Move this row up?", variable=up_var, anchor="w").pack(fill="x", padx=20, pady=2)
+        tk.Checkbutton(popup, text="Move this row down?", variable=down_var, anchor="w").pack(fill="x", padx=20, pady=2)
+        tk.Checkbutton(
+            popup,
+            text="Apply modifications to all weeks?",
+            variable=apply_all_var,
+            anchor="w"
+        ).pack(fill="x", padx=20, pady=2)
+
+        def _apply_and_close():
+            target_idx = self._find_row_index(btn)
+            if target_idx < 0:
+                popup.destroy()
+                return
+            rows_data = self.get_rows_data()
+            if not rows_data:
+                rows_data = [{}]
+
+            if delete_var.get():
+                if 0 <= target_idx < len(rows_data):
+                    rows_data.pop(target_idx)
+                if not rows_data:
+                    rows_data = [{}]
+            else:
+                if dup_var.get() and 0 <= target_idx < len(rows_data):
+                    rows_data.insert(target_idx + 1, dict(rows_data[target_idx]))
+                    target_idx = target_idx + 1
+                if up_var.get() and target_idx > 0:
+                    rows_data[target_idx - 1], rows_data[target_idx] = rows_data[target_idx], rows_data[target_idx - 1]
+                    target_idx = target_idx - 1
+                if down_var.get() and target_idx < len(rows_data) - 1:
+                    rows_data[target_idx + 1], rows_data[target_idx] = rows_data[target_idx], rows_data[target_idx + 1]
+                    target_idx = target_idx + 1
+
+            self.set_rows_data(rows_data)
+            self._highlight_row(target_idx if 0 <= target_idx < len(self.rows) else -1)
+
+            if apply_all_var.get():
+                self._apply_rows_to_all_weeks(rows_data)
+
+            popup.destroy()
+
+        tk.Button(popup, text="OK", width=10, command=_apply_and_close).pack(pady=10)
+        popup.bind("<Return>", lambda e: _apply_and_close())
+        popup.bind("<Escape>", lambda e: popup.destroy())
+        popup.grab_set()
+        _center_popup_over_widget(popup, btn)
 
     def _setup_mousewheel(self):
         """Active la molette pour faire défiler le tableau des contraintes."""
