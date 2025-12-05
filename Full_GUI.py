@@ -1328,7 +1328,7 @@ class GUI(tk.Frame):
                 self,
                 text="+",
                 font=(APP_FONT_FAMILY, int(8 * self.zoom_factor)),
-                command=lambda p=post: self.open_post_action_dialog(p)
+                command=lambda idx=col_idx: self._open_post_action_for_column(idx)
             )
             btn.grid(row=1, column=col_idx + 1, padx=pad, pady=pad, sticky="nsew")
 
@@ -1387,6 +1387,13 @@ class GUI(tk.Frame):
                 self.update_cell(day_idx, col_idx)
 
         self.auto_resize_all_columns()
+
+    def _open_post_action_for_column(self, col_idx: int) -> None:
+        posts_source = getattr(self, "local_work_posts", work_posts)
+        if 0 <= col_idx < len(posts_source):
+            self.open_post_action_dialog(posts_source[col_idx])
+        else:
+            return
 
     def is_cell_excluded_from_count(self, row_idx: int, col_idx: int) -> bool:
         """
