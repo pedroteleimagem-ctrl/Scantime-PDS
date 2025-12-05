@@ -83,13 +83,47 @@ def assigner_initiales(constraints_app, planning_gui):
     def _split_csv(text):
         return [p.strip() for p in str(text or "").replace(";", ",").split(",") if p.strip()]
 
-    def _normalize_scope(raw):
-        val = str(raw or "").strip().lower()
-        if val in {"weekdays_only", "weekday_only", "weekdays"}:
-            return "weekdays_only"
-        if val in {"weekends_only", "weekend_only", "weekend"}:
-            return "weekends_only"
-        return "all"
+    WEEKDAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    WEEKDAY_LABELS = {
+        "lundi": "mon", "lun": "mon",
+        "mardi": "tue", "mar": "tue",
+        "mercredi": "wed", "mer": "wed",
+        "jeudi": "thu", "jeu": "thu",
+        "vendredi": "fri", "ven": "fri",
+        "samedi": "sat", "sam": "sat",
+        "dimanche": "sun", "dim": "sun",
+    }
+
+    def _parse_excluded_weekdays(raw):
+        """
+        Convertit une valeur d'exclusion (ancienne portée week/week-end ou CSV de jours)
+        en ensemble de codes jour ('mon'..'sun').
+        """
+        if raw is None:
+            return set()
+        codes = set()
+        if isinstance(raw, (list, tuple, set)):
+            values = [str(x).strip().lower() for x in raw if str(x).strip()]
+        else:
+            txt = str(raw or "").strip().replace(";", ",")
+            values = [p.strip().lower() for p in txt.split(",") if p.strip()]
+
+        for val in values:
+            if not val or val in {"all", "+", "aucune", "aucune exclusion", "none", "0"}:
+                continue
+            if val in {"weekdays_only", "weekday_only", "weekdays"}:
+                codes.update(["fri", "sat", "sun"])
+                continue
+            if val in {"weekends_only", "weekend_only", "weekend"}:
+                codes.update(["mon", "tue", "wed", "thu"])
+                continue
+            if val in WEEKDAY_CODES:
+                codes.add(val)
+                continue
+            mapped = WEEKDAY_LABELS.get(val) or WEEKDAY_LABELS.get(val[:3])
+            if mapped:
+                codes.add(mapped)
+        return set(codes)
 
     try:
         max_we_enabled = bool(ENABLE_MAX_WE_DAYS)
@@ -118,6 +152,12 @@ def assigner_initiales(constraints_app, planning_gui):
         if wd >= 5 or wd == 4 or is_hol or next_hol:
             return "we"
         return "week"
+
+    def _weekday_code_for_day(day_num):
+        try:
+            return WEEKDAY_CODES[date(year, month, day_num).weekday()]
+        except Exception:
+            return None
 
     # Totaux annuels (m\u00eame liste de postes toute l'ann\u00e9e)
     annual_week = annual_we = 0
@@ -206,7 +246,8 @@ def assigner_initiales(constraints_app, planning_gui):
                         scope_raw = action_btn.cget("text")
             except Exception:
                 scope_raw = None
-        scope = _normalize_scope(scope_raw)
+        excluded_weekdays = _parse_excluded_weekdays(scope_raw)
+        scope = ",".join([code for code in WEEKDAY_CODES if code in excluded_weekdays])
 
         assoc_txt = ""
         try:
@@ -227,6 +268,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 "non_assured": non_assured,
                 "absences": absences,
                 "scope": scope,
+                "excluded_weekdays": excluded_weekdays,
                 "associations": associations,
             }
         )
@@ -288,12 +330,11 @@ def assigner_initiales(constraints_app, planning_gui):
     # Comptage des assignations existantes (par jour distinct)
     counts_week_days = {p["initial"]: set() for p in profiles}
     counts_we_days = {p["initial"]: set() for p in profiles}
+    profile_exclusions = {p["initial"]: set(p.get("excluded_weekdays", set())) for p in profiles}
 
-    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type):
-        scope = profile.get("scope", "all")
-        if scope == "weekdays_only" and day_type == "we":
-            return False
-        if scope == "weekends_only" and day_type == "week":
+    def _is_available(profile, day_idx, day_num, post_idx, post_name, day_type, weekday_code):
+        excluded_days = profile.get("excluded_weekdays", set())
+        if weekday_code and weekday_code in excluded_days:
             return False
         if day_type == "we" and max_we_enabled and max_we_limit is not None:
             try:
@@ -313,7 +354,12 @@ def assigner_initiales(constraints_app, planning_gui):
         in_month, day_num = _in_month(r_idx)
         if not in_month:
             continue
-        dtype = _day_type(date(year, month, day_num), hol_month)
+        try:
+            dt = date(year, month, day_num)
+        except Exception:
+            continue
+        dtype = _day_type(dt, hol_month)
+        weekday_code = WEEKDAY_CODES[dt.weekday()] if dt else None
         day_names = set()
         for c_idx, cell in enumerate(row):
             if not cell or c_idx >= len(work_posts):
@@ -328,6 +374,8 @@ def assigner_initiales(constraints_app, planning_gui):
                 existing_names = []
             day_names.update(nm for nm in existing_names if nm in counts_week_days)
         for nm in day_names:
+            if weekday_code and weekday_code in profile_exclusions.get(nm, set()):
+                continue
             if dtype == "we":
                 counts_we_days[nm].add(day_num)
             else:
@@ -341,7 +389,12 @@ def assigner_initiales(constraints_app, planning_gui):
         in_month, day_num = _in_month(r_idx)
         if not in_month:
             continue
-        dtype = _day_type(date(year, month, day_num), hol_month)
+        try:
+            dt = date(year, month, day_num)
+        except Exception:
+            continue
+        dtype = _day_type(dt, hol_month)
+        weekday_code = WEEKDAY_CODES[dt.weekday()] if dt else None
         for c_idx, cell in enumerate(row):
             if not cell or c_idx >= len(work_posts):
                 continue
@@ -354,7 +407,7 @@ def assigner_initiales(constraints_app, planning_gui):
                     continue
             except Exception:
                 continue
-            cases.append((r_idx, c_idx, day_num, dtype))
+            cases.append((r_idx, c_idx, day_num, dtype, weekday_code))
             if dtype == "we":
                 open_we_days.add(day_num)
             else:
@@ -363,12 +416,22 @@ def assigner_initiales(constraints_app, planning_gui):
     # Cibles mensuelles (volume reel du mois) mesurees en jours
     targets_week = {}
     targets_we = {}
-    week_day_count = len(open_week_days)
-    we_day_count = len(open_we_days)
     for p in profiles:
-        scope = p.get("scope", "all")
-        targets_week[p["initial"]] = (p["participation"] * week_day_count) if scope != "weekends_only" else 0.0
-        targets_we[p["initial"]] = (p["participation"] * we_day_count) if scope != "weekdays_only" else 0.0
+        excluded = set(p.get("excluded_weekdays", set()))
+        effective_week = []
+        for d in open_week_days:
+            code = _weekday_code_for_day(d)
+            if code and code in excluded:
+                continue
+            effective_week.append(d)
+        effective_we = []
+        for d in open_we_days:
+            code = _weekday_code_for_day(d)
+            if code and code in excluded:
+                continue
+            effective_we.append(d)
+        targets_week[p["initial"]] = p["participation"] * len(effective_week)
+        targets_we[p["initial"]] = p["participation"] * len(effective_we)
 
     def _update_counts(profile_initial, dtype, day_num):
         if dtype == "we":
@@ -429,7 +492,7 @@ def assigner_initiales(constraints_app, planning_gui):
         scored.sort(key=lambda x: (x[0], -x[1], x[2]))
         return scored[0][3]
 
-    def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype, allow_weekend_block=True):
+    def _assign_profile_to_cell(profile, r_idx, c_idx, day_num, dtype, weekday_code=None, allow_weekend_block=True):
         """Affecte le profil sur (jour, poste) et sur les postes associes eligibles le meme jour."""
         try:
             cell = planning_gui.table_entries[r_idx][c_idx]
@@ -445,6 +508,9 @@ def assigner_initiales(constraints_app, planning_gui):
             return False
 
         _update_counts(profile["initial"], dtype, day_num)
+
+        if weekday_code is None:
+            weekday_code = _weekday_code_for_day(day_num)
 
         assoc_indices = profile_assoc_map.get(profile["initial"], {}).get(c_idx, set()) or set()
         for other_idx in assoc_indices:
@@ -464,7 +530,7 @@ def assigner_initiales(constraints_app, planning_gui):
             except Exception:
                 continue
             other_name = work_posts[other_idx]
-            if not _is_available(profile, r_idx, day_num, other_idx, other_name, dtype):
+            if not _is_available(profile, r_idx, day_num, other_idx, other_name, dtype, weekday_code):
                 continue
             try:
                 other_cell.delete(0, "end")
@@ -483,9 +549,14 @@ def assigner_initiales(constraints_app, planning_gui):
                 other_r_idx = day_to_row.get(other_day_num)
                 if other_r_idx is None or other_r_idx == r_idx:
                     continue
-                other_dtype = _day_type(date(year, month, other_day_num), hol_month)
+                try:
+                    other_dt = date(year, month, other_day_num)
+                except Exception:
+                    continue
+                other_dtype = _day_type(other_dt, hol_month)
                 if other_dtype != "we":
                     continue
+                other_weekday_code = WEEKDAY_CODES[other_dt.weekday()]
                 try:
                     other_cell = planning_gui.table_entries[other_r_idx][c_idx]
                     if not other_cell or other_cell.get().strip():
@@ -493,9 +564,9 @@ def assigner_initiales(constraints_app, planning_gui):
                 except Exception:
                     continue
                 other_post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
-                if not _is_available(profile, other_r_idx, other_day_num, c_idx, other_post_name, other_dtype):
+                if not _is_available(profile, other_r_idx, other_day_num, c_idx, other_post_name, other_dtype, other_weekday_code):
                     continue
-                _assign_profile_to_cell(profile, other_r_idx, c_idx, other_day_num, other_dtype, allow_weekend_block=False)
+                _assign_profile_to_cell(profile, other_r_idx, c_idx, other_day_num, other_dtype, other_weekday_code, allow_weekend_block=False)
 
         context.clear_caches()
         try:
@@ -507,7 +578,7 @@ def assigner_initiales(constraints_app, planning_gui):
     # Parcours aléatoire des cases pour limiter les biais d'ordre (jour/colonne)
     random.shuffle(cases)
 
-    for (r_idx, c_idx, day_num, dtype) in cases:
+    for (r_idx, c_idx, day_num, dtype, weekday_code) in cases:
         try:
             current_cell = planning_gui.table_entries[r_idx][c_idx]
             if not current_cell or current_cell.get().strip():
@@ -519,7 +590,7 @@ def assigner_initiales(constraints_app, planning_gui):
 
         candidate_entries = []
         for p in profiles:
-            if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype):
+            if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype, weekday_code):
                 continue
             candidate_entries.append((p, post_name in p.get("preferred", [])))
 
@@ -530,4 +601,4 @@ def assigner_initiales(constraints_app, planning_gui):
         if chosen is None:
             continue
 
-        _assign_profile_to_cell(chosen, r_idx, c_idx, day_num, dtype)
+        _assign_profile_to_cell(chosen, r_idx, c_idx, day_num, dtype, weekday_code)

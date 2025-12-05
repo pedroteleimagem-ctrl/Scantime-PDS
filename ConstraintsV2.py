@@ -15,9 +15,82 @@ COLUMNS = [
     "Commentaire",
 ]
 
+# Codes d'exclusion par jour de semaine (lundi=mon ... dimanche=sun)
+EXCLUSION_DAYS = [
+    ("Lundi", "mon"),
+    ("Mardi", "tue"),
+    ("Mercredi", "wed"),
+    ("Jeudi", "thu"),
+    ("Vendredi", "fri"),
+    ("Samedi", "sat"),
+    ("Dimanche", "sun"),
+]
+EXCLUSION_CODE_ORDER = [code for _label, code in EXCLUSION_DAYS]
+
 
 def _split_csv(text: str):
     return [p.strip() for p in str(text or "").split(",") if p.strip()]
+
+def _serialize_exclusion_codes(codes):
+    """Retourne une liste canonique de codes (mon..sun) triés dans l'ordre de la semaine."""
+    normalized = {str(c).strip().lower() for c in (codes or []) if str(c).strip()}
+    ordered = [code for code in EXCLUSION_CODE_ORDER if code in normalized]
+    return ",".join(ordered)
+
+def _normalize_exclusion_value(raw):
+    """
+    Convertit une entrée hétérogène (chaîne CSV, anciens scopes weekday/weekend,
+    liste/tuple) en chaîne canonique de codes jour ('mon,tue,...').
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, (list, tuple, set)):
+        return _serialize_exclusion_codes(raw)
+
+    txt = str(raw or "").strip()
+    txt_lower = txt.lower()
+    if not txt_lower or txt_lower in {"all", "+", "aucune exclusion", "aucune", "none", "0"}:
+        return ""
+    if txt_lower in {"weekdays_only", "weekday_only", "weekdays"}:
+        return _serialize_exclusion_codes({"fri", "sat", "sun"})
+    if txt_lower in {"weekends_only", "weekend_only", "weekend"}:
+        return _serialize_exclusion_codes({"mon", "tue", "wed", "thu"})
+
+    label_map = {label.lower(): code for label, code in EXCLUSION_DAYS}
+    abbrev_map = {label[:3].lower(): code for label, code in EXCLUSION_DAYS}
+
+    codes = set()
+    for part in txt.replace(";", ",").split(","):
+        p = part.strip()
+        if not p:
+            continue
+        lower = p.lower()
+        if lower in EXCLUSION_CODE_ORDER:
+            codes.add(lower)
+            continue
+        if lower in label_map:
+            codes.add(label_map[lower])
+            continue
+        if lower in abbrev_map:
+            codes.add(abbrev_map[lower])
+            continue
+    return _serialize_exclusion_codes(codes)
+
+def _format_exclusion_label(codes):
+    """Retourne un libellé court pour le bouton (ex. 'Lun, Mer')."""
+    if not codes:
+        return "Aucune exclusion"
+    labels = []
+    for label, code in EXCLUSION_DAYS:
+        if code in codes:
+            labels.append(label[:3])
+    if len(labels) > 3:
+        return ", ".join(labels[:3]) + f" (+{len(labels) - 3})"
+    return ", ".join(labels)
+
+def _labels_from_codes(codes):
+    code_set = set(codes or [])
+    return [label for label, code in EXCLUSION_DAYS if code in code_set]
 
 def _center_popup_over_widget(popup: tk.Toplevel, widget) -> None:
     """
@@ -267,11 +340,6 @@ class ConstraintsTable(tk.Frame):
     """Tableau de contraintes simplifié (mensuel)."""
 
     MIN_COL_WIDTHS = [120, 110, 170, 170, 170, 170, 140, 200, 60]
-    EXCLUSION_STATES = [
-        ("Aucune exclusion", "all"),
-        ("Semaine uniquement", "weekdays_only"),
-        ("WE/fériés uniquement", "weekends_only"),
-    ]
 
     def __init__(self, master=None, work_posts=None, planning_gui=None):
         super().__init__(master)
@@ -407,12 +475,12 @@ class ConstraintsTable(tk.Frame):
         abs_btn.var = abs_var
         entries.append(abs_btn)
 
-        # Exclusions (cycle semaine / WE)
+        # Exclusions (sélection de jours)
         exclusion_btn = tk.Button(self.table, width=16, font=("Arial", 9))
-        exclusion_btn._var = tk.StringVar(master=self, value="all")
+        exclusion_btn._var = tk.StringVar(master=self, value="")
         exclusion_btn._is_exclusion_button = True
         self._update_exclusion_button(exclusion_btn)
-        exclusion_btn.config(command=lambda b=exclusion_btn: self._cycle_exclusion_state(b))
+        exclusion_btn.config(command=lambda b=exclusion_btn: self._open_exclusion_popup(b))
         exclusion_btn.grid(row=idx, column=6, padx=4, pady=2, sticky="ew")
         entries.append(exclusion_btn)
 
@@ -424,7 +492,7 @@ class ConstraintsTable(tk.Frame):
         # Bouton d'action (+) en fin de ligne
         action_btn = tk.Button(self.table, text="+", width=3)
         action_btn._is_row_action_button = True
-        action_btn._var = tk.StringVar(master=self, value="all")
+        action_btn._var = tk.StringVar(master=self, value="")
         action_btn.config(command=lambda b=action_btn: self._open_action_menu(b))
         action_btn.grid(row=idx, column=8, padx=4, pady=2, sticky="e")
         entries.append(action_btn)
@@ -483,42 +551,33 @@ class ConstraintsTable(tk.Frame):
             var.set("")
             btn.config(text="Sélectionner")
 
-    def _cycle_exclusion_state(self, btn: tk.Button):
-        """Fait tourner la valeur d'exclusion semaine/WE."""
-        states = [state for _label, state in self.EXCLUSION_STATES]
+    def _open_exclusion_popup(self, btn: tk.Button):
+        """Ouvre un popup multi-sélection pour choisir les jours exclus."""
         try:
-            current = btn._var.get()
+            current_codes = _split_csv(btn._var.get())
         except Exception:
-            current = "all"
-        try:
-            idx = states.index(current)
-        except ValueError:
-            idx = 0
-        next_state = states[(idx + 1) % len(states)]
-        try:
-            btn._var.set(next_state)
-        except Exception:
-            pass
+            current_codes = []
+        preselected_labels = _labels_from_codes(current_codes)
+        all_labels = [label for label, _code in EXCLUSION_DAYS]
+        popup = MultiSelectPopup(self, all_labels, preselected=preselected_labels, anchor_widget=btn)
+        self.wait_window(popup)
+        if popup.selected:
+            label_map = {label: code for label, code in EXCLUSION_DAYS}
+            chosen_codes = [label_map.get(lbl) for lbl in popup.selected if lbl in label_map]
+            btn._var.set(_serialize_exclusion_codes(chosen_codes))
+        else:
+            btn._var.set("")
         self._update_exclusion_button(btn)
 
     def _update_exclusion_button(self, btn: tk.Button):
         """Met à jour le libellé du bouton d'exclusion."""
         try:
-            current = btn._var.get()
+            normalized = _normalize_exclusion_value(btn._var.get())
+            btn._var.set(normalized)
+            codes = _split_csv(normalized)
         except Exception:
-            current = "all"
-        label = None
-        for lbl, state in self.EXCLUSION_STATES:
-            if state == current:
-                label = lbl
-                break
-        if label is None:
-            label = self.EXCLUSION_STATES[0][0]
-            try:
-                btn._var.set(self.EXCLUSION_STATES[0][1])
-            except Exception:
-                pass
-        btn.config(text=label)
+            codes = []
+        btn.config(text=_format_exclusion_label(set(codes)))
 
     def _find_row_index(self, widget) -> int:
         for idx, row in enumerate(self.rows):
@@ -838,9 +897,12 @@ class ConstraintsTable(tk.Frame):
             except Exception:
                 comment = ""
             try:
-                exclusion_scope = row[6]._var.get() if getattr(row[6], "_is_exclusion_button", False) else "all"
+                if getattr(row[6], "_is_exclusion_button", False):
+                    exclusion_scope = _normalize_exclusion_value(row[6]._var.get())
+                else:
+                    exclusion_scope = ""
             except Exception:
-                exclusion_scope = "all"
+                exclusion_scope = ""
             data.append({
                 "initiales": initials,
                 "participation": part_val or "100",
@@ -878,13 +940,15 @@ class ConstraintsTable(tk.Frame):
                 row[4].config(text=row[4]._var.get() or "Sélectionner")
             row[5].var.set(row_dict.get("absences", ""))
             row[5].config(text=row[5].var.get() or "Sélectionner")
-            try:
-                exclusion_val = row_dict.get("exclusions", row_dict.get("scope", "all"))
-                if getattr(row[6], "_is_exclusion_button", False):
-                    row[6]._var.set(exclusion_val or "all")
-                    self._update_exclusion_button(row[6])
-            except Exception:
-                pass
+        try:
+            exclusion_val = _normalize_exclusion_value(
+                row_dict.get("exclusions", row_dict.get("scope", ""))
+            )
+            if getattr(row[6], "_is_exclusion_button", False):
+                row[6]._var.set(exclusion_val)
+                self._update_exclusion_button(row[6])
+        except Exception:
+            pass
             row[7].insert(0, row_dict.get("commentaire", ""))
 
     def refresh_work_posts(self, new_posts):

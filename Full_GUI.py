@@ -3835,7 +3835,12 @@ def load_status(file_path: str | None = None):
                     elif getattr(widget, "_is_exclusion_button", False):
                         scope_val = "" if value in (None, "+") else str(value)
                         try:
-                            widget._var.set(scope_val or "all")
+                            from ConstraintsV2 import _normalize_exclusion_value  # import local pour éviter les cycles
+                            normalized_scope = _normalize_exclusion_value(scope_val)
+                        except Exception:
+                            normalized_scope = scope_val or ""
+                        try:
+                            widget._var.set(normalized_scope)
                         except Exception:
                             pass
                         try:
@@ -3843,7 +3848,7 @@ def load_status(file_path: str | None = None):
                                 c._update_exclusion_button(widget)
                         except Exception:
                             try:
-                                widget.config(text=scope_val or "Aucune exclusion")
+                                widget.config(text=normalized_scope or "Aucune exclusion")
                             except Exception:
                                 pass
                     elif hasattr(widget, "_var") and not getattr(widget, "_is_row_action_button", False):
@@ -3852,10 +3857,10 @@ def load_status(file_path: str | None = None):
                         widget.config(text=val_str or "Sélectionner")
                     elif isinstance(widget, tk.Button):
                         if getattr(widget, "_is_row_action_button", False):
-                            scope_val = str(value) if value not in (None, "+") else "all"
+                            scope_val = str(value) if value not in (None, "+") else ""
                             if hasattr(widget, "_var"):
                                 try:
-                                    widget._var.set(scope_val or "all")
+                                    widget._var.set(scope_val or "")
                                 except Exception:
                                     pass
                             widget.config(text="+")
