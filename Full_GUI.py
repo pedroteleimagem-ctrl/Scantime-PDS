@@ -4704,7 +4704,7 @@ if __name__ == '__main__':
                 try:
                     if getattr(Assignation, "OPTIMIZE_BALANCE", False) and len(tabs_data) >= 2:
                         # Snapshot avant optimisation pour rollback éventuel
-                        snapshot_opt = []
+                        snapshot_opt_before = []
                         for row in gui_local.table_entries:
                             row_snapshot = []
                             for cell in row:
@@ -4715,7 +4715,91 @@ if __name__ == '__main__':
                                         row_snapshot.append(cell.get())
                                     except Exception:
                                         row_snapshot.append("")
-                            snapshot_opt.append(row_snapshot)
+                            snapshot_opt_before.append(row_snapshot)
+
+                        def _counts_from_snapshot(snapshot_rows):
+                            """Calcule les compteurs (week, we) par initiale depuis un snapshot brut."""
+                            valid_initials = set()
+                            try:
+                                for crow in constraints_app_local.rows:
+                                    try:
+                                        init = crow[0].get().strip()
+                                        if init:
+                                            valid_initials.add(init)
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                pass
+                            excl = getattr(gui_local, "excluded_from_count", set()) or set()
+
+                            def _day_type_for_row(row_idx):
+                                try:
+                                    day_text = gui_local.day_labels[row_idx].cget("text").strip()
+                                    if not day_text.isdigit():
+                                        return None
+                                    day_num = int(day_text)
+                                    dt = date(gui_local.current_year, gui_local.current_month, day_num)
+                                except Exception:
+                                    return None
+                                weekend_rows = getattr(gui_local, "weekend_rows", set())
+                                holiday_rows = getattr(gui_local, "holiday_rows", set())
+                                holiday_dates = getattr(gui_local, "holiday_dates", set())
+                                is_holiday = (row_idx in holiday_rows) or (dt in holiday_dates)
+                                is_weekend = (row_idx in weekend_rows) or dt.weekday() >= 5
+                                is_friday = dt.weekday() == 4
+                                try:
+                                    next_day = dt + timedelta(days=1)
+                                    next_day_holiday = next_day in holiday_dates and next_day.month == dt.month
+                                except Exception:
+                                    next_day_holiday = False
+                                if is_holiday or is_weekend or is_friday or next_day_holiday:
+                                    return "we"
+                                return "week"
+
+                            counts = {}
+                            for r_idx, snap_row in enumerate(snapshot_rows):
+                                dtype = _day_type_for_row(r_idx)
+                                if dtype is None:
+                                    continue
+                                names_in_day = set()
+                                for c_idx, val in enumerate(snap_row):
+                                    if (r_idx, c_idx) in excl:
+                                        continue
+                                    if not val:
+                                        continue
+                                    names = extract_names_from_cell(val, valid_initials)
+                                    if not names:
+                                        continue
+                                    for nm in names:
+                                        if nm in valid_initials:
+                                            names_in_day.add(nm)
+                                if not names_in_day:
+                                    continue
+                                for nm in names_in_day:
+                                    bucket = counts.setdefault(nm, {"week": 0, "we": 0})
+                                    bucket[dtype] = bucket.get(dtype, 0) + 1
+                            return counts
+
+                        def _apply_snapshot(snapshot_rows):
+                            """Réécrit la table depuis un snapshot simple (liste de listes de strings/None)."""
+                            try:
+                                for r_idx, snap_row in enumerate(snapshot_rows):
+                                    if r_idx >= len(gui_local.table_entries):
+                                        break
+                                    for c_idx, val in enumerate(snap_row):
+                                        if c_idx >= len(gui_local.table_entries[r_idx]):
+                                            break
+                                        cell = gui_local.table_entries[r_idx][c_idx]
+                                        if cell is None:
+                                            continue
+                                        try:
+                                            cell.delete(0, "end")
+                                            if val:
+                                                cell.insert(0, val)
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
 
                         current_idx = None
                         try:
@@ -4727,12 +4811,29 @@ if __name__ == '__main__':
                             current_idx = None
                         if current_idx is not None and current_idx > 0:
                             opt_changes = Assignation.optimize_month_balance(constraints_app_local, gui_local, tabs_data, current_index=current_idx) or []
+                            # Snapshot après optimisation (état modifié)
+                            snapshot_opt_after = []
+                            for row in gui_local.table_entries:
+                                row_snapshot = []
+                                for cell in row:
+                                    if cell is None:
+                                        row_snapshot.append(None)
+                                    else:
+                                        try:
+                                            row_snapshot.append(cell.get())
+                                        except Exception:
+                                            row_snapshot.append("")
+                                snapshot_opt_after.append(row_snapshot)
+
+                            counts_before = _counts_from_snapshot(snapshot_opt_before)
+                            counts_after = _counts_from_snapshot(snapshot_opt_after)
+
+                            # Restaurer l'état pré-optimisation pour affichage/compteurs
+                            _apply_snapshot(snapshot_opt_before)
                             gui_local.schedule_update_colors()
                             if hasattr(gui_local, "shift_count_table"):
-                                try:
-                                    gui_local.shift_count_table.update_counts()
-                                except Exception:
-                                    pass
+                                gui_local.shift_count_table.update_counts()
+
                             if opt_changes:
                                 # Popup de confirmation avec liste des changements
                                 dialog = tk.Toplevel(root)
@@ -4750,6 +4851,16 @@ if __name__ == '__main__':
                                 for change in opt_changes:
                                     line = f"Jour {change.get('day','?')} / {change.get('post','?')} : {change.get('from','?')} -> {change.get('to','?')}\n"
                                     txt.insert("end", line)
+                                # Ajouter un résumé des deltas de compte pour comprendre l'effet
+                                if counts_before or counts_after:
+                                    txt.insert("end", "\nRésumé compteurs (semaine / WE) :\n")
+                                    initials = sorted(set(counts_before.keys()) | set(counts_after.keys()))
+                                    for init in initials:
+                                        b = counts_before.get(init, {"week": 0, "we": 0})
+                                        a = counts_after.get(init, {"week": 0, "we": 0})
+                                        if (b.get("week", 0), b.get("we", 0)) == (a.get("week", 0), a.get("we", 0)):
+                                            continue
+                                        txt.insert("end", f"{init}: {b.get('week',0)}/{b.get('we',0)} -> {a.get('week',0)}/{a.get('we',0)}\n")
                                 txt.config(state="disabled")
 
                                 # Positionner la popup au centre de la fenêtre principale
@@ -4787,26 +4898,15 @@ if __name__ == '__main__':
                                 dialog.wait_window()
 
                                 if not result["keep"]:
-                                    # Restaurer l'état pré-optimisation
-                                    for r_idx, row in enumerate(gui_local.table_entries):
-                                        if r_idx >= len(snapshot_opt):
-                                            break
-                                        snap_row = snapshot_opt[r_idx]
-                                        for c_idx, cell in enumerate(row):
-                                            if cell is None or c_idx >= len(snap_row):
-                                                continue
-                                            try:
-                                                cell.delete(0, "end")
-                                                if snap_row[c_idx]:
-                                                    cell.insert(0, snap_row[c_idx])
-                                            except Exception:
-                                                pass
+                                    # Rester sur l'état pré-optimisation (déjà restauré)
+                                    if hasattr(gui_local, "shift_count_table"):
+                                        gui_local.shift_count_table.update_counts()
+                                else:
+                                    # Appliquer l'état optimisé et mettre à jour l'affichage/compteurs
+                                    _apply_snapshot(snapshot_opt_after)
                                     gui_local.schedule_update_colors()
                                     if hasattr(gui_local, "shift_count_table"):
-                                        try:
-                                            gui_local.shift_count_table.update_counts()
-                                        except Exception:
-                                            pass
+                                        gui_local.shift_count_table.update_counts()
                             else:
                                 messagebox.showinfo("Optimisation", "Optimisation terminée : aucune modification apportée.")
                 except Exception:

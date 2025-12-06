@@ -1164,102 +1164,101 @@ def optimize_month_balance(constraints_app, planning_gui, tabs_data, current_ind
             return counts_we.get(initial, 0) - targets_we.get(initial, 0.0)
         return counts_week.get(initial, 0) - targets_week.get(initial, 0.0)
 
-    def _apply_swap(cell_a, cell_b):
-        r1, c1, init1 = cell_a["r"], cell_a["c"], cell_a["initial"]
-        r2, c2, init2 = cell_b["r"], cell_b["c"], cell_b["initial"]
+    # Optimisation : remplacements pour réduire l'écart aux cibles (pas de swap)
+    changes_log = []
+
+    def _apply_replacement(cell_entry, new_initial):
+        """Remplace l'initiale sur la cellule, met à jour les comptes et l'entrée."""
+        r, c, old_initial = cell_entry["r"], cell_entry["c"], cell_entry["initial"]
         try:
-            entries[r1][c1].delete(0, "end")
-            entries[r1][c1].insert(0, init2)
-            entries[r2][c2].delete(0, "end")
-            entries[r2][c2].insert(0, init1)
+            cell = entries[r][c]
+            if cell is None:
+                return False
+            cell.delete(0, "end")
+            cell.insert(0, new_initial)
         except Exception:
             return False
-        if cell_a["dtype"] == "we":
-            counts_we[init1] = counts_we.get(init1, 0) - 1
-            counts_we[init2] = counts_we.get(init2, 0) + 1
+        if cell_entry["dtype"] == "we":
+            counts_we[old_initial] = counts_we.get(old_initial, 0) - 1
+            counts_we[new_initial] = counts_we.get(new_initial, 0) + 1
         else:
-            counts_week[init1] = counts_week.get(init1, 0) - 1
-            counts_week[init2] = counts_week.get(init2, 0) + 1
-        cell_a["initial"], cell_b["initial"] = init2, init1
+            counts_week[old_initial] = counts_week.get(old_initial, 0) - 1
+            counts_week[new_initial] = counts_week.get(new_initial, 0) + 1
+        cell_entry["initial"] = new_initial
         return True
 
-    # Optimisation : swaps locaux
-    improved = True
-    iterations = 0
-    MAX_ITERS = 100
-    changes_log = []
-    while improved and iterations < MAX_ITERS:
+    MAX_ITERS = 200
+    iter_count = 0
+    while iter_count < MAX_ITERS:
+        iter_count += 1
         improved = False
-        iterations += 1
-        best_gain = 0
-        best_pair = None
-        random.shuffle(filled_cells)
-        for i in range(len(filled_cells)):
-            a = filled_cells[i]
-            dtype = a["dtype"]
-            # skip bloc week-end (trop complexe à swaper proprement)
-            if dtype == "we":
-                post_name_a = work_posts[a["c"]] if a["c"] < len(work_posts) else ""
-                if post_name_a in weekend_block_posts:
+        for dtype in ("week", "we"):
+            target_map = targets_week if dtype == "week" else targets_we
+            count_map = counts_week if dtype == "week" else counts_we
+            over_inits = sorted(
+                [init for init in initials_set if _diff(init, dtype) > 0.01],
+                key=lambda x: _diff(x, dtype),
+                reverse=True,
+            )
+            under_inits = sorted(
+                [init for init in initials_set if _diff(init, dtype) < -0.01],
+                key=lambda x: _diff(x, dtype),
+            )
+            if not over_inits or not under_inits:
+                continue
+
+            # Indexer les cellules par initiale pour ce dtype
+            cells_by_initial = {}
+            for idx, cell in enumerate(filled_cells):
+                if cell["dtype"] != dtype:
                     continue
-            for j in range(i + 1, len(filled_cells)):
-                b = filled_cells[j]
-                if b["dtype"] != dtype:
-                    continue
-                if dtype == "we":
-                    post_name_b = work_posts[b["c"]] if b["c"] < len(work_posts) else ""
-                    if post_name_b in weekend_block_posts:
+                cells_by_initial.setdefault(cell["initial"], []).append(idx)
+
+            for over_init in over_inits:
+                cell_indices = cells_by_initial.get(over_init, [])
+                random.shuffle(cell_indices)
+                for cell_idx in cell_indices:
+                    cell_entry = filled_cells[cell_idx]
+                    post_name = work_posts[cell_entry["c"]] if cell_entry["c"] < len(work_posts) else ""
+                    if dtype == "we" and post_name in weekend_block_posts:
                         continue
-                if a["initial"] == b["initial"]:
-                    continue
-                prof_a = profile_by_initial.get(a["initial"])
-                prof_b = profile_by_initial.get(b["initial"])
-                if not prof_a or not prof_b:
-                    continue
-                # Eligibilité croisée
-                if not _is_eligible(prof_a, b["r"], b["c"], dtype, b["day_num"], b["dt"]):
-                    continue
-                if not _is_eligible(prof_b, a["r"], a["c"], dtype, a["day_num"], a["dt"]):
-                    continue
-                # Gain potentiel
-                delta = 0
-                if dtype == "we":
-                    da_before = counts_we.get(prof_a["initial"], 0)
-                    db_before = counts_we.get(prof_b["initial"], 0)
-                    da_after = da_before - 1
-                    db_after = db_before + 1
-                    delta = (abs(da_before - targets_we.get(prof_a["initial"], 0.0)) +
-                             abs(db_before - targets_we.get(prof_b["initial"], 0.0)) -
-                             abs(da_after - targets_we.get(prof_a["initial"], 0.0)) -
-                             abs(db_after - targets_we.get(prof_b["initial"], 0.0)))
-                else:
-                    da_before = counts_week.get(prof_a["initial"], 0)
-                    db_before = counts_week.get(prof_b["initial"], 0)
-                    da_after = da_before - 1
-                    db_after = db_before + 1
-                    delta = (abs(da_before - targets_week.get(prof_a["initial"], 0.0)) +
-                             abs(db_before - targets_week.get(prof_b["initial"], 0.0)) -
-                             abs(da_after - targets_week.get(prof_a["initial"], 0.0)) -
-                             abs(db_after - targets_week.get(prof_b["initial"], 0.0)))
-                if delta > best_gain:
-                    best_gain = delta
-                    best_pair = (i, j)
-        if best_pair is not None and best_gain > 0:
-            a = filled_cells[best_pair[0]]
-            b = filled_cells[best_pair[1]]
-            if _apply_swap(a, b):
-                # Ajout au log
-                try:
-                    day_label = str(days[a["r"]]) if a["r"] < len(days) else str(a["r"] + 1)
-                except Exception:
-                    day_label = str(a["r"] + 1)
-                post_name = work_posts[a["c"]] if a["c"] < len(work_posts) else f"Poste {a['c']+1}"
-                changes_log.append({
-                    "day": day_label,
-                    "post": post_name,
-                    "from": b["initial"],
-                    "to": a["initial"],
-                    "dtype": a["dtype"],
-                })
-                improved = True
+                    for under_init in under_inits:
+                        if under_init == over_init:
+                            continue
+                        prof_under = profile_by_initial.get(under_init)
+                        if not prof_under:
+                            continue
+                        if not _is_eligible(
+                            prof_under,
+                            cell_entry["r"],
+                            cell_entry["c"],
+                            dtype,
+                            cell_entry["day_num"],
+                            cell_entry["dt"],
+                        ):
+                            continue
+                        before_over = count_map.get(over_init, 0)
+                        before_under = count_map.get(under_init, 0)
+                        if _apply_replacement(cell_entry, under_init):
+                            # Log changement
+                            try:
+                                day_label = str(days[cell_entry["r"]]) if cell_entry["r"] < len(days) else str(cell_entry["r"] + 1)
+                            except Exception:
+                                day_label = str(cell_entry["r"] + 1)
+                            changes_log.append({
+                                "day": day_label,
+                                "post": post_name or f"Poste {cell_entry['c']+1}",
+                                "from": over_init,
+                                "to": under_init,
+                                "dtype": dtype,
+                            })
+                            improved = True
+                            break
+                    if improved:
+                        break
+                if improved:
+                    break
+        if not improved:
+            break
+
     return changes_log
