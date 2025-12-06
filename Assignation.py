@@ -25,8 +25,19 @@ ENABLE_REPOS_SECURITE = False
 ENABLE_MAX_WE_DAYS = False
 MAX_WE_DAYS_PER_MONTH = None
 ENABLE_WEEKEND_BLOCKS = False
+WEEKEND_BLOCK_POSTS: Set[str] = set()
 
 FORBIDDEN_POST_ASSOCIATIONS: Set[Tuple[str, str]] = set()
+
+
+def filter_weekend_block_posts(valid_posts: Iterable[str]) -> None:
+    """
+    Retire de WEEKEND_BLOCK_POSTS les postes qui n'existent plus
+    (appelé quand la liste des postes change).
+    """
+    global WEEKEND_BLOCK_POSTS
+    valid = set(valid_posts or [])
+    WEEKEND_BLOCK_POSTS = {p for p in WEEKEND_BLOCK_POSTS if p in valid}
 
 
 def build_forbidden_maps(work_posts: Iterable[str]) -> Tuple[Dict[int, frozenset[int]], Dict[int, frozenset[int]]]:
@@ -278,6 +289,8 @@ def assigner_initiales(constraints_app, planning_gui):
     # Casse l'ordre des lignes du tableau de contraintes pour éviter un biais de sélection
     random.shuffle(profiles)
 
+    profile_by_initial = {p["initial"]: p for p in profiles}
+
     parser_valids = initials_set
     exclusion_checker = getattr(planning_gui, "is_cell_excluded_from_count", None)
     excluded_cells = getattr(planning_gui, "excluded_from_count", set())
@@ -433,6 +446,15 @@ def assigner_initiales(constraints_app, planning_gui):
         targets_week[p["initial"]] = p["participation"] * len(effective_week)
         targets_we[p["initial"]] = p["participation"] * len(effective_we)
 
+    weekend_block_posts = set()
+    try:
+        weekend_block_posts = set(WEEKEND_BLOCK_POSTS)
+    except Exception:
+        weekend_block_posts = set()
+    # Compatibilité : ancien toggle global activé = appliquer à toutes les lignes
+    if ENABLE_WEEKEND_BLOCKS and not weekend_block_posts:
+        weekend_block_posts = set(work_posts)
+
     def _update_counts(profile_initial, dtype, day_num):
         if dtype == "we":
             counts_we_days.setdefault(profile_initial, set()).add(day_num)
@@ -544,7 +566,8 @@ def assigner_initiales(constraints_app, planning_gui):
                 pass
 
         # Bloc week-end : remplir le m\u00eame poste sur ven/sam/dim du bloc si l'option est activ\u00e9e
-        if allow_weekend_block and dtype == "we" and ENABLE_WEEKEND_BLOCKS:
+        current_post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+        if allow_weekend_block and dtype == "we" and current_post_name in weekend_block_posts:
             for other_day_num in _weekend_block_days(day_num):
                 other_r_idx = day_to_row.get(other_day_num)
                 if other_r_idx is None or other_r_idx == r_idx:
@@ -575,6 +598,90 @@ def assigner_initiales(constraints_app, planning_gui):
             pass
         return True
 
+    def _assign_weekend_block(r_idx, c_idx, day_num, dtype, weekday_code):
+        """
+        Force un bloc ven-sam-dim cohérent sur un poste marqué "bloc week-end".
+        - Si une des 3 cases du bloc est déjà remplie, on étend le même profil sur les autres.
+        - Sinon, on choisit un profil disponible sur les 3 jours, puis on remplit les 3.
+        Retourne True si quelque chose a été affecté, False sinon.
+        """
+        if dtype != "we":
+            return False
+        post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+        if post_name not in weekend_block_posts:
+            return False
+
+        block_cells = []
+        for other_day_num in _weekend_block_days(day_num):
+            other_r_idx = day_to_row.get(other_day_num)
+            if other_r_idx is None:
+                continue
+            try:
+                other_dt = date(year, month, other_day_num)
+            except Exception:
+                continue
+            other_dtype = _day_type(other_dt, hol_month)
+            if other_dtype != "we":
+                continue
+            other_weekday_code = WEEKDAY_CODES[other_dt.weekday()]
+            block_cells.append((other_r_idx, other_day_num, other_dtype, other_weekday_code))
+
+        # 1) Cas où un profil est déjà posé sur au moins un jour du bloc
+        existing_profile = None
+        for br_idx, b_day, b_dtype, b_code in block_cells:
+            try:
+                val = planning_gui.table_entries[br_idx][c_idx].get().strip()
+            except Exception:
+                val = ""
+            if not val:
+                continue
+            existing_profile = profile_by_initial.get(val)
+            if existing_profile:
+                break
+
+        if existing_profile:
+            filled = False
+            for br_idx, b_day, b_dtype, b_code in block_cells:
+                try:
+                    cell = planning_gui.table_entries[br_idx][c_idx]
+                    if not cell or cell.get().strip():
+                        continue
+                except Exception:
+                    continue
+                if not _is_available(existing_profile, br_idx, b_day, c_idx, post_name, b_dtype, b_code):
+                    continue
+                _assign_profile_to_cell(existing_profile, br_idx, c_idx, b_day, b_dtype, b_code, allow_weekend_block=False)
+                filled = True
+            return filled
+
+        # 2) Bloc vide : on cherche un profil disponible sur les 3 jours
+        candidates = []
+        for p in profiles:
+            ok = True
+            for br_idx, b_day, b_dtype, b_code in block_cells:
+                if not _is_available(p, br_idx, b_day, c_idx, post_name, b_dtype, b_code):
+                    ok = False
+                    break
+            if ok:
+                candidates.append((p, post_name in p.get("preferred", [])))
+
+        random.shuffle(candidates)
+        chosen = _pick_candidate(candidates, dtype) if candidates else None
+        if chosen is None:
+            return False
+
+        for br_idx, b_day, b_dtype, b_code in block_cells:
+            try:
+                cell = planning_gui.table_entries[br_idx][c_idx]
+                if not cell or cell.get().strip():
+                    continue
+            except Exception:
+                continue
+            if not _is_available(chosen, br_idx, b_day, c_idx, post_name, b_dtype, b_code):
+                continue
+            _assign_profile_to_cell(chosen, br_idx, c_idx, b_day, b_dtype, b_code, allow_weekend_block=False)
+        return True
+
     # Parcours aléatoire des cases pour limiter les biais d'ordre (jour/colonne)
     random.shuffle(cases)
 
@@ -587,6 +694,10 @@ def assigner_initiales(constraints_app, planning_gui):
             continue
 
         post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+
+        # Si un autre jour du bloc a déjà été affecté, on force l'homogénéité du bloc
+        if _assign_weekend_block(r_idx, c_idx, day_num, dtype, weekday_code):
+            continue
 
         candidate_entries = []
         for p in profiles:

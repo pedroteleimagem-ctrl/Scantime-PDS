@@ -139,6 +139,7 @@ class MultiSelectPopup(tk.Toplevel):
         self.title("Sélection")
         self.resizable(False, False)
         self.selected = []
+        self._confirmed = False
         self._anchor_widget = anchor_widget or master
         pre = set(preselected or [])
         frame = tk.Frame(self)
@@ -160,6 +161,7 @@ class MultiSelectPopup(tk.Toplevel):
         _center_popup_over_widget(self, self._anchor_widget)
 
     def on_ok(self):
+        self._confirmed = True
         self.selected = [self.listbox.get(i) for i in self.listbox.curselection()]
         self.destroy()
 

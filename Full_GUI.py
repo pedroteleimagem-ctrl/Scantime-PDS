@@ -10,7 +10,7 @@ import locale
 from datetime import date, timedelta
 import Assignation
 from Assignation import assigner_initiales
-from ConstraintsV2 import ConstraintsTable
+from ConstraintsV2 import ConstraintsTable, MultiSelectPopup
 from Export import (
     export_to_excel as export_to_excel_external,
     export_combined_to_excel as export_combined_to_excel_external
@@ -425,6 +425,15 @@ def update_work_posts(new_posts):
                         gui_instance.schedule_update_colors()
                     except Exception:
                         pass
+        # Nettoyage de la sélection des lignes week-end en bloc si des postes ont disparu
+        if hasattr(Assignation, "filter_weekend_block_posts"):
+            Assignation.filter_weekend_block_posts(new_posts)
+        else:
+            try:
+                Assignation.WEEKEND_BLOCK_POSTS = {p for p in getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()) if p in set(new_posts)}
+            except Exception:
+                Assignation.WEEKEND_BLOCK_POSTS = set()
+        Assignation.ENABLE_WEEKEND_BLOCKS = bool(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
     except Exception:
         pass
 
@@ -3199,7 +3208,7 @@ def save_status(file_path=None, *, update_caption=True):
             "holiday_dates": sorted(list(getattr(g, "holiday_dates", set()))),
         }
 
-        # On sauvegarde dÃ©sormais 7 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6/7)
+        # On sauvegarde dÃ©sormais 9 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6/7/8/9)
         all_week_status.append((
             table_data,
             cell_availability_data,
@@ -3223,6 +3232,7 @@ def save_status(file_path=None, *, update_caption=True):
         getattr(Assignation, "ENABLE_MAX_WE_DAYS", False),
         getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None),
         getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False),
+        sorted(getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()) or []),
     )
 
     try:
@@ -3620,7 +3630,18 @@ def load_status(file_path: str | None = None):
         assignment_len = len(assignment_options) if isinstance(assignment_options, (list, tuple)) else 0
         Assignation.ENABLE_MAX_WE_DAYS = False
         Assignation.MAX_WE_DAYS_PER_MONTH = None
-        if assignment_len >= 8:
+        weekend_block_posts_loaded = []
+        if assignment_len >= 9:
+            (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
+             Assignation.ENABLE_MAX_ASSIGNMENTS,
+             Assignation.MAX_ASSIGNMENTS_PER_POST,
+             Assignation.ENABLE_REPOS_SECURITE,
+             loaded_pairs,
+             Assignation.ENABLE_MAX_WE_DAYS,
+             Assignation.MAX_WE_DAYS_PER_MONTH,
+             Assignation.ENABLE_WEEKEND_BLOCKS,
+             weekend_block_posts_loaded) = assignment_options[:9]
+        elif assignment_len >= 8:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
              Assignation.MAX_ASSIGNMENTS_PER_POST,
@@ -3629,6 +3650,7 @@ def load_status(file_path: str | None = None):
              Assignation.ENABLE_MAX_WE_DAYS,
              Assignation.MAX_WE_DAYS_PER_MONTH,
              Assignation.ENABLE_WEEKEND_BLOCKS) = assignment_options[:8]
+            weekend_block_posts_loaded = work_posts if Assignation.ENABLE_WEEKEND_BLOCKS else []
         elif assignment_len >= 7:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
@@ -3649,6 +3671,9 @@ def load_status(file_path: str | None = None):
              Assignation.MAX_ASSIGNMENTS_PER_POST,
              Assignation.ENABLE_REPOS_SECURITE) = assignment_options
             loaded_pairs = []
+            Assignation.ENABLE_WEEKEND_BLOCKS = False
+        if assignment_len < 8:
+            Assignation.ENABLE_WEEKEND_BLOCKS = False
 
         Assignation.FORBIDDEN_POST_ASSOCIATIONS.clear()
         if loaded_pairs:
@@ -3666,6 +3691,15 @@ def load_status(file_path: str | None = None):
         elif Assignation.ENABLE_DIFFERENT_POST_PER_DAY:
             auto_pairs = [(post, post) for post in work_posts]
             Assignation.FORBIDDEN_POST_ASSOCIATIONS.update(auto_pairs)
+
+        # Mise à jour de la sélection des lignes concernées par le bloc week-end
+        try:
+            Assignation.WEEKEND_BLOCK_POSTS = {p for p in (weekend_block_posts_loaded or []) if p in work_posts}
+        except Exception:
+            Assignation.WEEKEND_BLOCK_POSTS = set()
+        if Assignation.ENABLE_WEEKEND_BLOCKS and not getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()):
+            Assignation.WEEKEND_BLOCK_POSTS = set(work_posts) if Assignation.ENABLE_WEEKEND_BLOCKS else set()
+        Assignation.ENABLE_WEEKEND_BLOCKS = bool(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
 
         different_post_var.set(Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
         limitation_enabled_var.set(Assignation.ENABLE_MAX_ASSIGNMENTS)
@@ -4303,13 +4337,13 @@ if __name__ == '__main__':
     different_post_var = tk.BooleanVar(value=Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
     limitation_enabled_var = tk.BooleanVar(value=Assignation.ENABLE_MAX_ASSIGNMENTS)
     repos_securite_var = tk.BooleanVar(value=Assignation.ENABLE_REPOS_SECURITE)
-    weekend_block_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False))
     max_we_days_enabled_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_MAX_WE_DAYS", False))
     _initial_we_limit = getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None)
     max_we_days_value_var = tk.IntVar(
         value=_initial_we_limit if _initial_we_limit is not None else 4
     )
     set_max_we_entry_idx = None
+    weekend_block_entry_idx = None
 
     def _sync_max_we_menu_state():
         try:
@@ -4330,11 +4364,31 @@ if __name__ == '__main__':
     def _on_toggle_max_we_days():
         _sync_max_we_menu_state()
 
-    def _on_toggle_weekend_block():
+    def _weekend_block_label():
         try:
-            Assignation.ENABLE_WEEKEND_BLOCKS = bool(weekend_block_var.get())
+            count = len(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
         except Exception:
-            Assignation.ENABLE_WEEKEND_BLOCKS = False
+            count = 0
+        suffix = f" ({count} ligne{'s' if count > 1 else ''})" if count else ""
+        return "Affecter les week-ends en bloc (ven-sam-dim)" + suffix
+
+    def open_weekend_block_popup():
+        preselected = sorted(getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()) or [])
+        popup = MultiSelectPopup(root, work_posts, preselected=preselected, anchor_widget=root)
+        root.wait_window(popup)
+        if not getattr(popup, "_confirmed", False):
+            return
+        selected = getattr(popup, "selected", []) or []
+        try:
+            Assignation.WEEKEND_BLOCK_POSTS = set(selected)
+        except Exception:
+            Assignation.WEEKEND_BLOCK_POSTS = set()
+        Assignation.ENABLE_WEEKEND_BLOCKS = bool(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
+        if weekend_block_entry_idx is not None:
+            try:
+                setup_menu.entryconfig(weekend_block_entry_idx, label=_weekend_block_label())
+            except Exception:
+                pass
 
     def open_max_we_days_dialog():
         def _center_popup(popup, widget):
@@ -4434,10 +4488,10 @@ if __name__ == '__main__':
         variable=max_we_days_enabled_var,
         command=_on_toggle_max_we_days,
     )
-    setup_menu.add_checkbutton(
-        label="Affecter les week-ends en bloc (ven-sam-dim)",
-        variable=weekend_block_var,
-        command=_on_toggle_weekend_block,
+    weekend_block_entry_idx = setup_menu.index("end") + 1 if setup_menu.index("end") is not None else 0
+    setup_menu.add_command(
+        label=_weekend_block_label(),
+        command=open_weekend_block_popup,
     )
     setup_menu.add_command(
         label="Définir la limite (jours)",
