@@ -3933,7 +3933,12 @@ def load_status(file_path: str | None = None):
 
             # Label semaine + recolorations + dÃ©compte
             g.week_label.config(text=week_label_text)
+            g.refresh_day_labels()
             g.update_colors(None)
+            try:
+                g.schedule_update_colors(0)
+            except Exception:
+                pass
             s.update_counts()               # â tient compte des exclusions
             g.auto_resize_all_columns()
 
