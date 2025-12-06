@@ -394,11 +394,21 @@ if __name__ == '__main__':
 days = [str(i) for i in range(1, 32)]
 
 # Dictionnaire des postes (astreintes) avec couleur par dÃ©faut
+_BASE_SHIFTS_DEFAULT = {
+    "MATIN":  {d: "08h00-13h00" for d in days},
+    "AP MIDI": {d: "13h00-18h30" for d in days},
+}
+for _period in _BASE_SHIFTS_DEFAULT.values():
+    _period["Samedi"] = None
+    _period["Dimanche"] = None
+
 POST_INFO = {
-    "Ligne 1": {"color": "#C6E0B4", "shifts": {}},
-    "Ligne 2": {"color": "#F9E199", "shifts": {}},
-    "Ligne 3": {"color": "#C5A0DD", "shifts": {}},
-    "Ligne 4": {"color": "#F4B183", "shifts": {}},
+    name: {"color": "#DDDDDD",
+           "shifts": {
+               "MATIN":  _BASE_SHIFTS_DEFAULT["MATIN"].copy(),
+               "AP MIDI": _BASE_SHIFTS_DEFAULT["AP MIDI"].copy(),
+           }}
+    for name in (f"Ligne {i}" for i in range(1, 5))
 }
 
 # Liste globale des postes, utilisÃ©e Ã©galement par Constraints.py
@@ -1217,9 +1227,8 @@ class GUI(tk.Frame):
         self.week_label = None
 
         self.day_labels = []
-        today = date.today()
-        self.current_year = today.year
-        self.current_month = today.month
+        self.current_year = None
+        self.current_month = None
         self.weekend_rows = set()
         self.holiday_rows = set()
         self.holiday_dates = set()
@@ -1945,6 +1954,50 @@ class GUI(tk.Frame):
         if selected_date:
             self.apply_month_selection(selected_date.year, selected_date.month)
 
+    def clear_month_selection(self):
+        """
+        Réinitialise l'état mois/année : aucun mois sélectionné,
+        on masque les jours et on vide les couleurs weekend/feriés.
+        """
+        self.current_year = None
+        self.current_month = None
+        self.weekend_rows = set()
+        self.holiday_rows = set()
+        self.holiday_dates = set()
+        self.visible_day_count = 0
+        try:
+            if self.week_label is not None:
+                self.week_label.config(text="Choisir un mois")
+        except Exception:
+            pass
+
+        total_cols = len(self.table_entries[0]) if self.table_entries else 0
+        new_hidden = set()
+        for idx, lbl in enumerate(self.day_labels):
+            try:
+                lbl.config(text="", bg=DAY_LABEL_BG, fg="white")
+                lbl.grid_remove()
+            except Exception:
+                pass
+            new_hidden.add(idx)
+            for col_idx in range(total_cols):
+                try:
+                    frame = self.table_frames[idx][col_idx]
+                    entry = self.table_entries[idx][col_idx]
+                except Exception:
+                    continue
+                if frame:
+                    frame.grid_remove()
+                if entry:
+                    try:
+                        entry.delete(0, "end")
+                    except Exception:
+                        pass
+                    self.cell_availability[(idx, col_idx)] = False
+                    self.update_cell(idx, col_idx)
+        self.hidden_rows = new_hidden
+        self.schedule_update_colors()
+
     def apply_month_selection(self, year: int, month: int):
         self.current_year = year
         self.current_month = month
@@ -2473,8 +2526,8 @@ class GUI(tk.Frame):
     def reset_layout_to_default(self):
         """
         RÃ©initialise le layout de la semaine en cours :
-        - Restaure 5 postes (Â« Poste 1 Â» Ã  Â« Poste 5 Â») sans noms.
-        - RÃ©initialise les horaires par dÃ©faut pour Poste 1 et Poste 2.
+        - Restaure 4 lignes (Â« Ligne 1 Â» Ã  Â« Ligne 4 Â») gris neutre, sans noms.
+        - RÃ©initialise les horaires par dÃ©faut (matin / apm) pour ces lignes.
         - Efface toutes les affectations (tableau vide).
         Demande une confirmation Ã  l'utilisateur avant d'appliquer.
         """
@@ -2483,39 +2536,36 @@ class GUI(tk.Frame):
         if not messagebox.askyesno(
             "Confirmer la rÃ©initialisation du layout",
             "Cette action va rÃ©initialiser la semaine au layout par dÃ©faut\n"
-            "(5 postes vides, couleurs et horaires par dÃ©faut) et effacer les donnÃ©es.\n"
+            "(4 lignes vides, couleurs grises et horaires par dÃ©faut) et effacer les donnÃ©es.\n"
             "Voulez-vous continuer ?"
         ):
             return
 
         # 1) RÃ©initialiser la description des postes au niveau global.
         #    On reconstruit POST_INFO et la liste work_posts afin d'obtenir
-        #    exactement le layout de dÃ©marrage.
+        #    exactement le layout de dÃ©marrage (4 lignes grises).
         global POST_INFO
         POST_INFO.clear()
-        base_shifts = {
-            "MATIN":  {d: "08h00-13h00" for d in days},
-            "AP MIDI": {d: "13h00-18h30" for d in days},
-        }
-        # Pas d'horaires le week-end
-        for period in base_shifts.values():
-            period["Samedi"] = None
-            period["Dimanche"] = None
-
-        for i in (1, 2):
-            POST_INFO[f"Poste {i}"] = {
+        for i in range(1, 5):
+            POST_INFO[f"Ligne {i}"] = {
                 "color": "#DDDDDD",
                 "shifts": {
-                    "MATIN":  base_shifts["MATIN"].copy(),
-                    "AP MIDI": base_shifts["AP MIDI"].copy()
+                    "MATIN":  _BASE_SHIFTS_DEFAULT["MATIN"].copy(),
+                    "AP MIDI": _BASE_SHIFTS_DEFAULT["AP MIDI"].copy()
                 }
             }
 
-        # 2) RÃ©tablir la liste de 5 postes (Â« Poste 1 Â»..Â« Poste 5 Â»)
-        update_work_posts([f"Poste {i}" for i in range(1, 6)])
+        # 2) RÃ©tablir la liste des postes de dÃ©part (4 lignes)
+        update_work_posts([f"Ligne {i}" for i in range(1, 5)])
 
         # 3) Reconstruire l'interface de la semaine avec un tableau vide
         self.redraw_widgets(preserve_content=False)
+
+        # 3bis) Aucun mois sÃ©lectionnÃ© aprÃ¨s reset : planning vierge
+        try:
+            self.clear_month_selection()
+        except Exception:
+            pass
 
         # 4) Nettoyage/rafraÃ®chissement
         if hasattr(self, "warned_conflicts"):
@@ -4999,6 +5049,12 @@ if __name__ == '__main__':
             gui_local.constraints_app = None
             bottom_frame.grid_rowconfigure(0, weight=1)
             bottom_frame.grid_columnconfigure(0, weight=1)
+
+        # Layout vierge au démarrage : aucun mois sélectionné tant que l'utilisateur ne choisit pas
+        try:
+            gui_local.clear_month_selection()
+        except Exception:
+            pass
 
         return gui_local, constraints_app_local, shift_count_table
 
