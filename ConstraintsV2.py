@@ -942,16 +942,19 @@ class ConstraintsTable(tk.Frame):
                 row[4].config(text=row[4]._var.get() or "Sélectionner")
             row[5].var.set(row_dict.get("absences", ""))
             row[5].config(text=row[5].var.get() or "Sélectionner")
-        try:
-            exclusion_val = _normalize_exclusion_value(
-                row_dict.get("exclusions", row_dict.get("scope", ""))
-            )
-            if getattr(row[6], "_is_exclusion_button", False):
-                row[6]._var.set(exclusion_val)
-                self._update_exclusion_button(row[6])
-        except Exception:
-            pass
-            row[7].insert(0, row_dict.get("commentaire", ""))
+            try:
+                exclusion_val = _normalize_exclusion_value(
+                    row_dict.get("exclusions", row_dict.get("scope", ""))
+                )
+                if getattr(row[6], "_is_exclusion_button", False):
+                    row[6]._var.set(exclusion_val)
+                    self._update_exclusion_button(row[6])
+            except Exception:
+                pass
+            try:
+                row[7].insert(0, row_dict.get("commentaire", ""))
+            except Exception:
+                pass
 
     def refresh_work_posts(self, new_posts):
         """Met à jour la liste des postes utilisable pour préf/non assurées/associations."""

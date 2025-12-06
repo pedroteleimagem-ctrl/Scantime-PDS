@@ -5181,8 +5181,14 @@ if __name__ == '__main__':
                 source_constraints = tabs_data[0][1]
                 if source_constraints is not None and hasattr(source_constraints, "get_rows_data"):
                     rows_data = source_constraints.get_rows_data()
+                    # Ne pas copier les absences, mais conserver les exclusions et autres colonnes
+                    sanitized_rows = []
+                    for rd in rows_data:
+                        rd = dict(rd or {})
+                        rd["absences"] = ""
+                        sanitized_rows.append(rd)
                     if hasattr(new_constraints, "set_rows_data"):
-                        new_constraints.set_rows_data(rows_data)
+                        new_constraints.set_rows_data(sanitized_rows)
         except Exception:
             pass
 
