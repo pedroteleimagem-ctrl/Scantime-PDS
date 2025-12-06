@@ -659,12 +659,17 @@ class ConstraintsTable(tk.Frame):
             tabs_data = getattr(Full_GUI, "tabs_data", []) or []
         except Exception:
             tabs_data = []
+        sanitized_rows = []
+        for rd in rows_data or []:
+            rd = dict(rd or {})
+            rd["absences"] = ""
+            sanitized_rows.append(rd)
         for _gui, constraints_app, _shift in tabs_data:
             if constraints_app is None or constraints_app is self:
                 continue
             try:
                 if hasattr(constraints_app, "set_rows_data"):
-                    constraints_app.set_rows_data(rows_data)
+                    constraints_app.set_rows_data(sanitized_rows)
             except Exception:
                 continue
 
@@ -699,7 +704,7 @@ class ConstraintsTable(tk.Frame):
         tk.Checkbutton(popup, text="Move this row down?", variable=down_var, anchor="w").pack(fill="x", padx=20, pady=2)
         tk.Checkbutton(
             popup,
-            text="Apply modifications to all weeks?",
+            text="Apply modifications to all months?",
             variable=apply_all_var,
             anchor="w"
         ).pack(fill="x", padx=20, pady=2)
