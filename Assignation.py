@@ -26,6 +26,8 @@ ENABLE_MAX_WE_DAYS = False
 MAX_WE_DAYS_PER_MONTH = None
 ENABLE_WEEKEND_BLOCKS = False
 WEEKEND_BLOCK_POSTS: Set[str] = set()
+OPTIMIZE_BALANCE = False
+OPTIMIZE_BALANCE = False
 
 FORBIDDEN_POST_ASSOCIATIONS: Set[Tuple[str, str]] = set()
 
@@ -713,3 +715,415 @@ def assigner_initiales(constraints_app, planning_gui):
             continue
 
         _assign_profile_to_cell(chosen, r_idx, c_idx, day_num, dtype, weekday_code)
+
+
+def optimize_month_balance(constraints_app, planning_gui, tabs_data, current_index=None):
+    """
+    Passe d'optimisation locale sur le mois courant uniquement :
+    cherche des swaps entre profils pour réduire l'écart cumulatif (week / we)
+    sans violer les contraintes de base. Ne modifie rien si l'option n'est pas activée.
+    Retourne la liste des changements effectués.
+    """
+    if not OPTIMIZE_BALANCE:
+        return []
+    try:
+        if tabs_data is None or len(tabs_data) < 2:
+            return []
+    except Exception:
+        return []
+
+    import random
+    from datetime import date, timedelta
+    from Full_GUI import days, work_posts, extract_names_from_cell
+
+    # Trouver l'index du mois courant si non fourni
+    if current_index is None:
+        try:
+            for idx, item in enumerate(tabs_data):
+                if item and item[0] is planning_gui:
+                    current_index = idx
+                    break
+        except Exception:
+            current_index = None
+    if current_index is None or current_index <= 0:
+        # Pas d'optimisation pour le premier mois ou index inconnu
+        return []
+
+    rows = getattr(constraints_app, "rows", []) if constraints_app is not None else []
+    if not rows:
+        return
+
+    # --- Extraction des profils depuis le tableau de contraintes (copie légère) ---
+    def _split_csv(text):
+        return [p.strip() for p in str(text or "").replace(";", ",").split(",") if p.strip()]
+
+    def _parse_excluded_weekdays_val(txt):
+        txt_lower = str(txt or "").strip().lower()
+        if txt_lower in {"weekdays_only", "weekday_only", "weekdays"}:
+            return {"fri", "sat", "sun"}
+        if txt_lower in {"weekends_only", "weekend_only", "weekend"}:
+            return {"mon", "tue", "wed", "thu"}
+        parts = [p.strip() for p in txt_lower.replace(";", ",").split(",") if p.strip()]
+        return set(parts)
+
+    profiles = []
+    initials_set = set()
+    for row in rows:
+        try:
+            init = str(row[0].get()).strip()
+        except Exception:
+            init = ""
+        if not init:
+            continue
+        initials_set.add(init)
+        try:
+            part = float(row[1].get())
+        except Exception:
+            part = 100.0
+        part = max(0.0, min(100.0, part)) / 100.0
+        try:
+            pref_txt = row[2]._var.get() if hasattr(row[2], "_var") else row[2].cget("text")
+        except Exception:
+            pref_txt = ""
+        preferred = _split_csv(pref_txt)
+        try:
+            non_txt = row[3]._var.get()
+        except Exception:
+            try:
+                non_txt = row[3].cget("text")
+            except Exception:
+                non_txt = ""
+        non_assured = set(_split_csv(non_txt))
+
+        try:
+            abs_txt = row[5].var.get()
+        except Exception:
+            try:
+                abs_txt = row[5].cget("text")
+            except Exception:
+                abs_txt = ""
+        absences = set()
+        for part_item in _split_csv(abs_txt):
+            try:
+                if "-" in part_item:
+                    start, end = part_item.split("-", 1)
+                    start_i, end_i = int(start), int(end)
+                    if start_i <= end_i:
+                        absences.update(range(start_i, end_i + 1))
+                        continue
+                num = int(part_item)
+                absences.add(num)
+            except Exception:
+                continue
+
+        scope_raw = None
+        try:
+            exclusion_btn = next((w for w in row if getattr(w, "_is_exclusion_button", False)), None)
+        except Exception:
+            exclusion_btn = None
+        if exclusion_btn is not None:
+            try:
+                scope_raw = exclusion_btn._var.get()
+            except Exception:
+                try:
+                    scope_raw = exclusion_btn.cget("text")
+                except Exception:
+                    scope_raw = None
+        excluded_weekdays = set(_parse_excluded_weekdays_val(scope_raw)) if scope_raw else set()
+
+        assoc_txt = ""
+        try:
+            assoc_widget = row[4]
+            if hasattr(assoc_widget, "_var"):
+                assoc_txt = assoc_widget._var.get()
+            else:
+                assoc_txt = assoc_widget.cget("text")
+        except Exception:
+            assoc_txt = ""
+        associations = [p for p in _split_csv(assoc_txt)]
+
+        profiles.append(
+            {
+                "initial": init,
+                "participation": part,
+                "preferred": preferred,
+                "non_assured": non_assured,
+                "absences": absences,
+                "excluded_weekdays": excluded_weekdays,
+                "associations": associations,
+            }
+        )
+
+    if not profiles:
+        return []
+
+    profile_by_initial = {p["initial"]: p for p in profiles}
+
+    WEEKDAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    def _weekday_code(dt_obj: date | None):
+        try:
+            return WEEKDAY_CODES[dt_obj.weekday()]
+        except Exception:
+            return None
+
+    def _day_type_for_gui(gui_obj, row_idx):
+        try:
+            label_text = gui_obj.day_labels[row_idx].cget("text").strip()
+            day_num = int(label_text)
+        except Exception:
+            day_num = row_idx + 1
+        try:
+            year = getattr(gui_obj, "current_year", None)
+            month = getattr(gui_obj, "current_month", None)
+            dt = date(year, month, day_num) if year and month else None
+        except Exception:
+            dt = None
+        weekend_rows = getattr(gui_obj, "weekend_rows", set())
+        holiday_rows = getattr(gui_obj, "holiday_rows", set())
+        holiday_dates = getattr(gui_obj, "holiday_dates", set())
+        is_weekend = row_idx in weekend_rows
+        is_holiday = row_idx in holiday_rows
+        if dt:
+            try:
+                wd = dt.weekday()
+                is_weekend = is_weekend or wd >= 5 or wd == 4
+                is_holiday = is_holiday or dt in holiday_dates or (dt + timedelta(days=1) in holiday_dates)
+            except Exception:
+                pass
+        dtype = "we" if (is_weekend or is_holiday) else "week"
+        return dtype, day_num, dt
+
+    # Comptage cumulatif sur tous les mois jusqu'au courant
+    counts_week = {p["initial"]: 0 for p in profiles}
+    counts_we = {p["initial"]: 0 for p in profiles}
+    assigned_week_total = 0
+    assigned_we_total = 0
+
+    def _accumulate_tab(gui_obj, upto_only=False):
+        nonlocal assigned_week_total, assigned_we_total
+        entries = getattr(gui_obj, "table_entries", [])
+        cell_availability = getattr(gui_obj, "cell_availability", {})
+        for r_idx, row in enumerate(entries):
+            dtype, day_num, dt = _day_type_for_gui(gui_obj, r_idx)
+            for c_idx, cell in enumerate(row):
+                try:
+                    if not cell or not cell_availability.get((r_idx, c_idx), True):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    val = cell.get().strip()
+                except Exception:
+                    val = ""
+                if not val:
+                    continue
+                names = extract_names_from_cell(val, initials_set)
+                for nm in names:
+                    if nm not in counts_week:
+                        continue
+                    if dtype == "we":
+                        counts_we[nm] += 1
+                        assigned_we_total += 1
+                    else:
+                        counts_week[nm] += 1
+                        assigned_week_total += 1
+
+    try:
+        for idx, (g_obj, _c, _s) in enumerate(tabs_data):
+            if g_obj is None:
+                continue
+            _accumulate_tab(g_obj)
+            if idx >= current_index:
+                break
+    except Exception:
+        return
+
+    # Cibles : moyenne des 100% comme référence (sinon fallback proportionnel au total assigné)
+    full_time_inits = [p["initial"] for p in profiles if p.get("participation", 1.0) >= 0.99]
+    if full_time_inits:
+        avg_week_full = sum(counts_week.get(init, 0) for init in full_time_inits) / max(1, len(full_time_inits))
+        avg_we_full = sum(counts_we.get(init, 0) for init in full_time_inits) / max(1, len(full_time_inits))
+        targets_week = {p["initial"]: p["participation"] * avg_week_full for p in profiles}
+        targets_we = {p["initial"]: p["participation"] * avg_we_full for p in profiles}
+    else:
+        total_part = sum(p.get("participation", 1.0) for p in profiles) or 1.0
+        targets_week = {p["initial"]: (p.get("participation", 1.0) / total_part) * assigned_week_total for p in profiles}
+        targets_we = {p["initial"]: (p.get("participation", 1.0) / total_part) * assigned_we_total for p in profiles}
+
+    # Préparer les cellules du mois courant
+    current_gui = planning_gui
+    entries = getattr(current_gui, "table_entries", [])
+    cell_availability = getattr(current_gui, "cell_availability", {})
+    weekend_block_posts = set()
+    try:
+        weekend_block_posts = set(WEEKEND_BLOCK_POSTS)
+    except Exception:
+        weekend_block_posts = set()
+
+    def _is_eligible(profile, r_idx, c_idx, dtype, day_num, dt_obj):
+        post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+        # Cellule active
+        try:
+            if not cell_availability.get((r_idx, c_idx), True):
+                return False
+        except Exception:
+            return False
+        # Absence
+        if day_num in profile.get("absences", set()):
+            return False
+        # Exclusion jour
+        code = _weekday_code(dt_obj)
+        if code and code in profile.get("excluded_weekdays", set()):
+            return False
+        # Poste non assuré
+        if post_name and post_name in profile.get("non_assured", set()):
+            return False
+        # Pas de doublon non autorisé : on autorise si le profil est déjà présent ET que le poste est dans ses associations
+        row_cells = entries[r_idx] if r_idx < len(entries) else []
+        try:
+            existing_names = set()
+            for cell in row_cells:
+                if not cell:
+                    continue
+                val = cell.get().strip()
+                if not val:
+                    continue
+                existing_names.update(extract_names_from_cell(val, initials_set))
+            if profile["initial"] in existing_names:
+                if profile.get("associations"):
+                    return True
+                else:
+                    return False
+        except Exception:
+            pass
+        return True
+
+    # Liste des cellules remplies (mois courant) par type/poste
+    filled_cells = []
+    for r_idx, row in enumerate(entries):
+        dtype, day_num, dt_obj = _day_type_for_gui(current_gui, r_idx)
+        for c_idx, cell in enumerate(row):
+            try:
+                if not cell:
+                    continue
+                val = cell.get().strip()
+            except Exception:
+                continue
+            if not val:
+                continue
+            names = extract_names_from_cell(val, initials_set)
+            for nm in names:
+                filled_cells.append({
+                    "r": r_idx,
+                    "c": c_idx,
+                    "dtype": dtype,
+                    "day_num": day_num,
+                    "dt": dt_obj,
+                    "initial": nm,
+                })
+
+    def _diff(initial, dtype):
+        if dtype == "we":
+            return counts_we.get(initial, 0) - targets_we.get(initial, 0.0)
+        return counts_week.get(initial, 0) - targets_week.get(initial, 0.0)
+
+    def _apply_swap(cell_a, cell_b):
+        r1, c1, init1 = cell_a["r"], cell_a["c"], cell_a["initial"]
+        r2, c2, init2 = cell_b["r"], cell_b["c"], cell_b["initial"]
+        try:
+            entries[r1][c1].delete(0, "end")
+            entries[r1][c1].insert(0, init2)
+            entries[r2][c2].delete(0, "end")
+            entries[r2][c2].insert(0, init1)
+        except Exception:
+            return False
+        if cell_a["dtype"] == "we":
+            counts_we[init1] = counts_we.get(init1, 0) - 1
+            counts_we[init2] = counts_we.get(init2, 0) + 1
+        else:
+            counts_week[init1] = counts_week.get(init1, 0) - 1
+            counts_week[init2] = counts_week.get(init2, 0) + 1
+        cell_a["initial"], cell_b["initial"] = init2, init1
+        return True
+
+    # Optimisation : swaps locaux
+    improved = True
+    iterations = 0
+    MAX_ITERS = 100
+    changes_log = []
+    while improved and iterations < MAX_ITERS:
+        improved = False
+        iterations += 1
+        best_gain = 0
+        best_pair = None
+        random.shuffle(filled_cells)
+        for i in range(len(filled_cells)):
+            a = filled_cells[i]
+            dtype = a["dtype"]
+            # skip bloc week-end (trop complexe à swaper proprement)
+            if dtype == "we":
+                post_name_a = work_posts[a["c"]] if a["c"] < len(work_posts) else ""
+                if post_name_a in weekend_block_posts:
+                    continue
+            for j in range(i + 1, len(filled_cells)):
+                b = filled_cells[j]
+                if b["dtype"] != dtype:
+                    continue
+                if dtype == "we":
+                    post_name_b = work_posts[b["c"]] if b["c"] < len(work_posts) else ""
+                    if post_name_b in weekend_block_posts:
+                        continue
+                if a["initial"] == b["initial"]:
+                    continue
+                prof_a = profile_by_initial.get(a["initial"])
+                prof_b = profile_by_initial.get(b["initial"])
+                if not prof_a or not prof_b:
+                    continue
+                # Eligibilité croisée
+                if not _is_eligible(prof_a, b["r"], b["c"], dtype, b["day_num"], b["dt"]):
+                    continue
+                if not _is_eligible(prof_b, a["r"], a["c"], dtype, a["day_num"], a["dt"]):
+                    continue
+                # Gain potentiel
+                delta = 0
+                if dtype == "we":
+                    da_before = counts_we.get(prof_a["initial"], 0)
+                    db_before = counts_we.get(prof_b["initial"], 0)
+                    da_after = da_before - 1
+                    db_after = db_before + 1
+                    delta = (abs(da_before - targets_we.get(prof_a["initial"], 0.0)) +
+                             abs(db_before - targets_we.get(prof_b["initial"], 0.0)) -
+                             abs(da_after - targets_we.get(prof_a["initial"], 0.0)) -
+                             abs(db_after - targets_we.get(prof_b["initial"], 0.0)))
+                else:
+                    da_before = counts_week.get(prof_a["initial"], 0)
+                    db_before = counts_week.get(prof_b["initial"], 0)
+                    da_after = da_before - 1
+                    db_after = db_before + 1
+                    delta = (abs(da_before - targets_week.get(prof_a["initial"], 0.0)) +
+                             abs(db_before - targets_week.get(prof_b["initial"], 0.0)) -
+                             abs(da_after - targets_week.get(prof_a["initial"], 0.0)) -
+                             abs(db_after - targets_week.get(prof_b["initial"], 0.0)))
+                if delta > best_gain:
+                    best_gain = delta
+                    best_pair = (i, j)
+        if best_pair is not None and best_gain > 0:
+            a = filled_cells[best_pair[0]]
+            b = filled_cells[best_pair[1]]
+            if _apply_swap(a, b):
+                # Ajout au log
+                try:
+                    day_label = str(days[a["r"]]) if a["r"] < len(days) else str(a["r"] + 1)
+                except Exception:
+                    day_label = str(a["r"] + 1)
+                post_name = work_posts[a["c"]] if a["c"] < len(work_posts) else f"Poste {a['c']+1}"
+                changes_log.append({
+                    "day": day_label,
+                    "post": post_name,
+                    "from": b["initial"],
+                    "to": a["initial"],
+                    "dtype": a["dtype"],
+                })
+                improved = True
+    return changes_log

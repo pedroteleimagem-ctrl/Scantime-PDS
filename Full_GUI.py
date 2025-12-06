@@ -3208,7 +3208,7 @@ def save_status(file_path=None, *, update_caption=True):
             "holiday_dates": sorted(list(getattr(g, "holiday_dates", set()))),
         }
 
-        # On sauvegarde dÃ©sormais 9 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6/7/8/9)
+        # On sauvegarde dÃ©sormais 10 Ã©lÃ©ments (compat old: le load gÃ¨re 5/6/7/8/9/10)
         all_week_status.append((
             table_data,
             cell_availability_data,
@@ -3233,6 +3233,7 @@ def save_status(file_path=None, *, update_caption=True):
         getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None),
         getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False),
         sorted(getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()) or []),
+        getattr(Assignation, "OPTIMIZE_BALANCE", False),
     )
 
     try:
@@ -3631,7 +3632,19 @@ def load_status(file_path: str | None = None):
         Assignation.ENABLE_MAX_WE_DAYS = False
         Assignation.MAX_WE_DAYS_PER_MONTH = None
         weekend_block_posts_loaded = []
-        if assignment_len >= 9:
+        optimize_balance_loaded = False
+        if assignment_len >= 10:
+            (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
+             Assignation.ENABLE_MAX_ASSIGNMENTS,
+             Assignation.MAX_ASSIGNMENTS_PER_POST,
+             Assignation.ENABLE_REPOS_SECURITE,
+             loaded_pairs,
+             Assignation.ENABLE_MAX_WE_DAYS,
+             Assignation.MAX_WE_DAYS_PER_MONTH,
+             Assignation.ENABLE_WEEKEND_BLOCKS,
+             weekend_block_posts_loaded,
+             optimize_balance_loaded) = assignment_options[:10]
+        elif assignment_len >= 9:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
              Assignation.MAX_ASSIGNMENTS_PER_POST,
@@ -3674,6 +3687,7 @@ def load_status(file_path: str | None = None):
             Assignation.ENABLE_WEEKEND_BLOCKS = False
         if assignment_len < 8:
             Assignation.ENABLE_WEEKEND_BLOCKS = False
+        Assignation.OPTIMIZE_BALANCE = bool(optimize_balance_loaded) if assignment_len >= 10 else False
 
         Assignation.FORBIDDEN_POST_ASSOCIATIONS.clear()
         if loaded_pairs:
@@ -3700,6 +3714,7 @@ def load_status(file_path: str | None = None):
         if Assignation.ENABLE_WEEKEND_BLOCKS and not getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()):
             Assignation.WEEKEND_BLOCK_POSTS = set(work_posts) if Assignation.ENABLE_WEEKEND_BLOCKS else set()
         Assignation.ENABLE_WEEKEND_BLOCKS = bool(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
+        optimize_var.set(bool(getattr(Assignation, "OPTIMIZE_BALANCE", False)))
 
         different_post_var.set(Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
         limitation_enabled_var.set(Assignation.ENABLE_MAX_ASSIGNMENTS)
@@ -4343,6 +4358,7 @@ if __name__ == '__main__':
     limitation_enabled_var = tk.BooleanVar(value=Assignation.ENABLE_MAX_ASSIGNMENTS)
     repos_securite_var = tk.BooleanVar(value=Assignation.ENABLE_REPOS_SECURITE)
     max_we_days_enabled_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_MAX_WE_DAYS", False))
+    optimize_var = tk.BooleanVar(value=getattr(Assignation, "OPTIMIZE_BALANCE", False))
     _initial_we_limit = getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None)
     max_we_days_value_var = tk.IntVar(
         value=_initial_we_limit if _initial_we_limit is not None else 4
@@ -4498,6 +4514,11 @@ if __name__ == '__main__':
         label=_weekend_block_label(),
         command=open_weekend_block_popup,
     )
+    setup_menu.add_checkbutton(
+        label="Optimisation (rééquilibrage multi-mois)",
+        variable=optimize_var,
+        command=lambda: setattr(Assignation, "OPTIMIZE_BALANCE", bool(optimize_var.get())),
+    )
     setup_menu.add_command(
         label="Définir la limite (jours)",
         command=open_max_we_days_dialog,
@@ -4651,6 +4672,117 @@ if __name__ == '__main__':
                         gui_local.shift_count_table.update_counts()
                     except Exception:
                         pass
+                # Optimisation post-assignation (mois courant uniquement)
+                try:
+                    if getattr(Assignation, "OPTIMIZE_BALANCE", False) and len(tabs_data) >= 2:
+                        # Snapshot avant optimisation pour rollback éventuel
+                        snapshot_opt = []
+                        for row in gui_local.table_entries:
+                            row_snapshot = []
+                            for cell in row:
+                                if cell is None:
+                                    row_snapshot.append(None)
+                                else:
+                                    try:
+                                        row_snapshot.append(cell.get())
+                                    except Exception:
+                                        row_snapshot.append("")
+                            snapshot_opt.append(row_snapshot)
+
+                        current_idx = None
+                        try:
+                            for idx, item in enumerate(tabs_data):
+                                if item and item[0] is gui_local:
+                                    current_idx = idx
+                                    break
+                        except Exception:
+                            current_idx = None
+                        if current_idx is not None and current_idx > 0:
+                            opt_changes = Assignation.optimize_month_balance(constraints_app_local, gui_local, tabs_data, current_index=current_idx) or []
+                            gui_local.schedule_update_colors()
+                            if hasattr(gui_local, "shift_count_table"):
+                                try:
+                                    gui_local.shift_count_table.update_counts()
+                                except Exception:
+                                    pass
+                            if opt_changes:
+                                # Popup de confirmation avec liste des changements
+                                dialog = tk.Toplevel(root)
+                                dialog.title("Optimisation")
+                                dialog.transient(root)
+                                dialog.grab_set()
+                                ttk.Label(dialog, text="Optimisation : modifications proposées/appliquées").pack(padx=12, pady=(12, 6), anchor="w")
+                                text_frame = tk.Frame(dialog)
+                                text_frame.pack(padx=12, pady=(0, 8), fill="both", expand=True)
+                                txt = tk.Text(text_frame, width=60, height=12, state="normal")
+                                txt.pack(side="left", fill="both", expand=True)
+                                scroll = ttk.Scrollbar(text_frame, orient="vertical", command=txt.yview)
+                                scroll.pack(side="right", fill="y")
+                                txt.configure(yscrollcommand=scroll.set)
+                                for change in opt_changes:
+                                    line = f"Jour {change.get('day','?')} / {change.get('post','?')} : {change.get('from','?')} -> {change.get('to','?')}\n"
+                                    txt.insert("end", line)
+                                txt.config(state="disabled")
+
+                                # Positionner la popup au centre de la fenêtre principale
+                                try:
+                                    dialog.update_idletasks()
+                                    root.update_idletasks()
+                                    win_w = dialog.winfo_reqwidth()
+                                    win_h = dialog.winfo_reqheight()
+                                    root_x = root.winfo_rootx()
+                                    root_y = root.winfo_rooty()
+                                    root_w = root.winfo_width()
+                                    root_h = root.winfo_height()
+                                    pos_x = root_x + max(0, (root_w - win_w) // 2)
+                                    pos_y = root_y + max(0, (root_h - win_h) // 2)
+                                    dialog.geometry(f"+{pos_x}+{pos_y}")
+                                except Exception:
+                                    pass
+
+                                result = {"keep": False}
+
+                                def _accept():
+                                    result["keep"] = True
+                                    dialog.destroy()
+
+                                def _reject():
+                                    result["keep"] = False
+                                    dialog.destroy()
+
+                                btns = ttk.Frame(dialog)
+                                btns.pack(pady=(6, 10))
+                                ttk.Button(btns, text="OK", width=12, command=_accept, style=RIBBON_ACCENT_BUTTON_STYLE).pack(side="left", padx=6)
+                                ttk.Button(btns, text="Ne pas accepter", width=16, command=_reject, style=RIBBON_BUTTON_STYLE).pack(side="left", padx=6)
+                                dialog.bind("<Return>", lambda e: _accept())
+                                dialog.bind("<Escape>", lambda e: _reject())
+                                dialog.wait_window()
+
+                                if not result["keep"]:
+                                    # Restaurer l'état pré-optimisation
+                                    for r_idx, row in enumerate(gui_local.table_entries):
+                                        if r_idx >= len(snapshot_opt):
+                                            break
+                                        snap_row = snapshot_opt[r_idx]
+                                        for c_idx, cell in enumerate(row):
+                                            if cell is None or c_idx >= len(snap_row):
+                                                continue
+                                            try:
+                                                cell.delete(0, "end")
+                                                if snap_row[c_idx]:
+                                                    cell.insert(0, snap_row[c_idx])
+                                            except Exception:
+                                                pass
+                                    gui_local.schedule_update_colors()
+                                    if hasattr(gui_local, "shift_count_table"):
+                                        try:
+                                            gui_local.shift_count_table.update_counts()
+                                        except Exception:
+                                            pass
+                            else:
+                                messagebox.showinfo("Optimisation", "Optimisation terminée : aucune modification apportée.")
+                except Exception:
+                    pass
                 # Push the diff to the undo stack so "Annuler assignation" works.
                 try:
                     changes = []
