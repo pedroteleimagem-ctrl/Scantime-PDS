@@ -111,7 +111,7 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
         return result
 
     n_weeks   = len(tabs_data)
-    day_count = len(days)
+    day_count_default = len(days)
     # Key = normalized person name -> [weekly totals]
     weekly_totals_by_person = defaultdict(lambda: [0] * n_weeks)
 
@@ -167,35 +167,34 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                     parser_valids.add(init)
 
         table_entries = getattr(gui_w, 'table_entries', []) or []
+        day_count_week = min(day_count_default, len(table_entries))
         excluded_cells = getattr(gui_w, 'excluded_from_count', set()) or set()
-        for p_index, _post in enumerate(work_posts):
-            for shift_offset in range(2):
-                row_idx = p_index * 2 + shift_offset
-                if row_idx >= len(table_entries):
+        for di in range(day_count_week):
+            row_entries = table_entries[di]
+            for p_index, _post in enumerate(work_posts):
+                if p_index >= len(row_entries):
                     continue
-                row_entries = table_entries[row_idx]
-                for di in range(day_count):
-                    if (row_idx, di) in excluded_cells:
+                if (di, p_index) in excluded_cells:
+                    continue
+                cell = row_entries[p_index]
+                if not cell:
+                    continue
+                try:
+                    raw_value = cell.get()
+                except Exception:
+                    raw_value = ''
+                names = _parse_cell_names(raw_value, parser_valids)
+                if not names:
+                    continue
+                cell_seen = set()
+                for name in names:
+                    if not name:
                         continue
-                    cell = row_entries[di]
-                    if not cell:
+                    norm_name = norm_person(name)
+                    if norm_name in cell_seen or norm_name in seen_norms:
                         continue
-                    try:
-                        raw_value = cell.get()
-                    except Exception:
-                        raw_value = ''
-                    names = _parse_cell_names(raw_value, parser_valids)
-                    if not names:
-                        continue
-                    cell_seen = set()
-                    for name in names:
-                        if not name:
-                            continue
-                        norm_name = norm_person(name)
-                        if norm_name in cell_seen or norm_name in seen_norms:
-                            continue
-                        weekly_totals_by_person[norm_name][w_idx] += 1
-                        cell_seen.add(norm_name)
+                    weekly_totals_by_person[norm_name][w_idx] += 1
+                    cell_seen.add(norm_name)
 
     # --- Workbook / styles ---
     workbook = openpyxl.Workbook()
@@ -220,19 +219,27 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
         else:
             sheet = workbook.create_sheet(title=f"Semaine {idx+1}")
 
+        table_entries = getattr(gui_instance, 'table_entries', []) or []
+        day_count = min(day_count_default, len(table_entries))
+
         day_column_widths = {}
 
         # ---------- Collecte PDS ----------
         pds_by_day = [[] for _ in range(day_count)]
-        for row in getattr(constraints_instance, "rows", []):
-            if not row or len(row) < 5:
+        rows_constraints = getattr(constraints_instance, "rows", []) or []
+        for row in rows_constraints:
+            if not row or len(row) <= 4:
                 continue
             try:
                 initials = row[0].get().strip()
             except Exception:
                 initials = ""
-            for di in range(day_count):
-                tpl = row[4 + di]
+            max_di = min(day_count, len(row) - 4)
+            for di in range(max_di):
+                try:
+                    tpl = row[4 + di]
+                except Exception:
+                    continue
                 if isinstance(tpl, tuple) and len(tpl) == 3:
                     try:
                         if tpl[2].get() == 1:
@@ -244,174 +251,88 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
         semaine_label = gui_instance.week_label.cget("text").strip() or f"Semaine {idx+1}"
         sheet.cell(row=1, column=1, value=semaine_label).border = thin_border
 
-        col_post_name = 1
-        col_shift     = 2
-        col_day_start = 3
+        # Layout : lignes = jours, colonnes = postes
+        col_day_label = 1
+        col_post_start = 2
         header_row    = 2
 
-        # ---------- En-tÃªtes jours ----------
-        for di in range(day_count):
-            x = col_day_start + di
-            c = sheet.cell(row=header_row, column=x, value=days[di])
+        # En-tÃªtes colonnes (postes)
+        sheet.cell(row=header_row, column=col_day_label, value="Jour").border = thin_border
+        for p_index, post in enumerate(work_posts):
+            col = col_post_start + p_index
+            hexcol = (POST_INFO.get(post, {}).get("color", "#DDDDDD") or "#DDDDDD").lstrip("#")
+            post_fill = PatternFill(start_color=hexcol, end_color=hexcol, fill_type="solid")
+            c = sheet.cell(row=header_row, column=col, value=post)
             c.alignment = Alignment(horizontal="center", vertical="center")
             c.border    = thin_border
             c.font      = Font(bold=True)
+            c.fill      = post_fill
+            register_day_column_width(day_column_widths, col, post)
 
-        row_offset = 3
+        # Lignes de jours
+        weekend_rows = getattr(gui_instance, "weekend_rows", set()) or set()
+        holiday_rows = getattr(gui_instance, "holiday_rows", set()) or set()
+        holiday_dates = getattr(gui_instance, "holiday_dates", set()) or set()
+        current_year = getattr(gui_instance, "current_year", None)
+        current_month = getattr(gui_instance, "current_month", None)
 
-        # ---------- Planning principal ----------
-        for p_index, post in enumerate(work_posts):
-            hexcol    = (POST_INFO.get(post, {}).get("color", "#DDDDDD") or "#DDDDDD").lstrip("#")
-            post_fill = PatternFill(start_color=hexcol, end_color=hexcol, fill_type="solid")
+        WEEKEND_FILL = PatternFill(start_color="FFF6F2", end_color="FFF6F2", fill_type="solid")
+        HOLIDAY_FILL = PatternFill(start_color="FFF3D6", end_color="FFF3D6", fill_type="solid")
+        WHITE_FILL   = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
 
-            # Poste fusionnÃ© (4 lignes : 2 pour MATIN, 2 pour AP MIDI)
-            sheet.merge_cells(start_row=row_offset,   start_column=col_post_name,
-                              end_row=row_offset+3,   end_column=col_post_name)
-            cp = sheet.cell(row=row_offset, column=col_post_name, value=post)
-            cp.fill      = post_fill
-            cp.alignment = Alignment(horizontal="center", vertical="center")
-            cp.border    = thin_border
-            cp.font      = Font(bold=True)
+        row_offset = header_row + 1
+        for di in range(day_count):
+            excel_row = row_offset + di
+            try:
+                lbl_text = gui_instance.day_labels[di].cget("text").strip()
+            except Exception:
+                lbl_text = ""
+            if not lbl_text:
+                lbl_text = days[di] if di < len(days) else str(di + 1)
+            sheet.cell(row=excel_row, column=col_day_label, value=lbl_text).border = thin_border
 
-            # Label MATIN
-            sheet.merge_cells(start_row=row_offset,   start_column=col_shift,
-                              end_row=row_offset+1,   end_column=col_shift)
-            lm = sheet.cell(row=row_offset, column=col_shift, value="MATIN")
-            lm.fill      = post_fill
-            lm.alignment = Alignment(horizontal="center", vertical="center")
-            lm.border    = thin_border
-            lm.font      = Font(bold=True)
+            # Eval weekend/holiday
+            is_weekend = di in weekend_rows
+            is_holiday = di in holiday_rows
+            try:
+                if current_year and current_month and lbl_text.isdigit():
+                    dt = date(current_year, current_month, int(lbl_text))
+                    is_weekend = is_weekend or dt.weekday() >= 5
+                    is_holiday = is_holiday or (dt in holiday_dates)
+            except Exception:
+                pass
+            base_fill = HOLIDAY_FILL if is_holiday else (WEEKEND_FILL if is_weekend else WHITE_FILL)
 
-            # Label AP MIDI
-            sheet.merge_cells(start_row=row_offset+2, start_column=col_shift,
-                              end_row=row_offset+3,   end_column=col_shift)
-            la = sheet.cell(row=row_offset+2, column=col_shift, value="AP MIDI")
-            la.fill      = post_fill
-            la.alignment = Alignment(horizontal="center", vertical="center")
-            la.border    = thin_border
-            la.font      = Font(bold=True)
-
-            # Lignes GUI correspondantes
-            rg_matin  = p_index * 2
-            rg_apmidi = p_index * 2 + 1
-
-            for di in range(day_count):
-                x = col_day_start + di
-
-                # â€” MATIN â€”
-                lbl_time  = gui_instance.table_labels[rg_matin][di]
-                ent       = gui_instance.table_entries[rg_matin][di]
-                txt_time  = lbl_time.cget("text") if lbl_time else ""
-                txt_init  = ent.get().strip() if ent else ""
-                is_disabled_m = not gui_instance.cell_availability.get((rg_matin, di), True)
-
-                ctime = sheet.cell(row=row_offset,   column=x, value=txt_time)
-                register_day_column_width(day_column_widths, x, txt_time)
-                if is_disabled_m:
-                    ctime.fill = dark_grey_fill; ctime.font = Font(color="999999")
+            if di >= len(gui_instance.table_entries):
+                continue
+            row_entries = gui_instance.table_entries[di]
+            for p_index, post in enumerate(work_posts):
+                if p_index >= len(row_entries):
+                    continue
+                col = col_post_start + p_index
+                entry = row_entries[p_index]
+                try:
+                    txt_init = entry.get().strip()
+                except Exception:
+                    txt_init = ""
+                is_disabled = not gui_instance.cell_availability.get((di, p_index), True)
+                cell = sheet.cell(row=excel_row, column=col, value=txt_init)
+                register_day_column_width(day_column_widths, col, txt_init)
+                if is_disabled:
+                    cell.fill = dark_grey_fill
+                    cell.font = Font(color="999999")
                 else:
-                    ctime.fill = post_fill;      ctime.font = Font(color="000000")
-                ctime.alignment = Alignment(horizontal="center", vertical="center")
-                ctime.border    = thin_border
-
-                cinits = sheet.cell(row=row_offset+1, column=x, value=txt_init)
-                register_day_column_width(day_column_widths, x, txt_init)
-                if is_disabled_m:
-                    cinits.fill = dark_grey_fill; cinits.font = Font(color="000000")
-                else:
-                    cinits.fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+                    cell.fill = base_fill
                     if txt_init:
-                        cinits.font = Font(bold=True, color="FF0000")
-                cinits.alignment = Alignment(horizontal="center", vertical="center")
-                cinits.border    = thin_border
+                        cell.font = Font(bold=True, color="FF0000")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border    = thin_border
 
-                # â€” AP MIDI â€”
-                lbl_time2 = gui_instance.table_labels[rg_apmidi][di]
-                ent2      = gui_instance.table_entries[rg_apmidi][di]
-                txt_time2 = lbl_time2.cget("text") if lbl_time2 else ""
-                txt_init2 = ent2.get().strip() if ent2 else ""
-                is_disabled_a = not gui_instance.cell_availability.get((rg_apmidi, di), True)
-
-                ctime2 = sheet.cell(row=row_offset+2, column=x, value=txt_time2)
-                register_day_column_width(day_column_widths, x, txt_time2)
-                if is_disabled_a:
-                    ctime2.fill = dark_grey_fill; ctime2.font = Font(color="999999")
-                else:
-                    ctime2.fill = post_fill;      ctime2.font = Font(color="000000")
-                ctime2.alignment = Alignment(horizontal="center", vertical="center")
-                ctime2.border    = thin_border
-
-                cinits2 = sheet.cell(row=row_offset+3, column=x, value=txt_init2)
-                register_day_column_width(day_column_widths, x, txt_init2)
-                if is_disabled_a:
-                    cinits2.fill = dark_grey_fill; cinits2.font = Font(color="000000")
-                else:
-                    cinits2.fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-                    if txt_init2:
-                        cinits2.font = Font(bold=True, color="FF0000")
-                cinits2.alignment = Alignment(horizontal="center", vertical="center")
-                cinits2.border    = thin_border
-
-            row_offset += 4
-
-        # Largeur colonnes (poste, shift + jours)
-        max_col = col_day_start + day_count - 1
+        # Largeur colonnes
+        max_col = col_post_start + len(work_posts) - 1
         for c in range(1, max_col+1):
             let = get_column_letter(c)
-            sheet.column_dimensions[let].width = 20 if c == 1 else 15
-
-        # ---------- Ligne "PDS" ----------
-        pds_row = row_offset + 1
-        for rng in list(sheet.merged_cells.ranges):
-            if rng.min_col <= col_shift <= rng.max_col and rng.min_row <= pds_row <= rng.max_row:
-                sheet.unmerge_cells(str(rng))
-        pds_title = sheet.cell(row=pds_row, column=col_shift, value="PDS")
-        pds_title.font      = Font(bold=True)
-        pds_title.alignment = Alignment(horizontal="center", vertical="center")
-        pds_title.border    = thin_border
-        for di in range(day_count):
-            x = col_day_start + di
-            val = ", ".join(pds_by_day[di]) if pds_by_day[di] else ""
-            c = sheet.cell(row=pds_row, column=x, value=val)
-            register_day_column_width(day_column_widths, x, val)
-            c.font      = Font(bold=True, color="FF0000") if val else Font(color="000000")
-            c.alignment = Alignment(horizontal="center", vertical="center")
-            c.border    = thin_border
-            c.fill      = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-
-        # ---------- Ligne "Absence" ----------
-        abs_row   = pds_row + 1
-        abs_title = sheet.cell(row=abs_row, column=col_shift, value="Absence")
-        abs_title.font      = Font(bold=True)
-        abs_title.alignment = Alignment(horizontal="center", vertical="center")
-        abs_title.border    = thin_border
-
-        abs_by_day = [[] for _ in range(day_count)]
-        for row in getattr(constraints_instance, "rows", []):
-            if not row or len(row) < 5:
-                continue
-            try:
-                ini = row[0].get().strip()
-            except Exception:
-                ini = ""
-            for di in range(day_count):
-                tpl = row[4 + di]
-                if isinstance(tpl, tuple) and tpl:
-                    try:
-                        st = tpl[0]._var.get().strip().upper()
-                    except Exception:
-                        st = ""
-                    if st:
-                        abs_by_day[di].append(f"{ini} ({st})")
-        for di in range(day_count):
-            x = col_day_start + di
-            s = "\n".join(abs_by_day[di]) if abs_by_day[di] else ""
-            c = sheet.cell(row=abs_row, column=x, value=s)
-            register_day_column_width(day_column_widths, x, s)
-            c.font      = Font(bold=True, color="FF0000") if s else Font(color="000000")
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            c.border    = thin_border
-            c.fill      = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            sheet.column_dimensions[let].width = sheet.column_dimensions.get(let, type('', (), {'width':0})()).width or (22 if c == 1 else 14)
 
         # ---------- Tableau de dÃ©compte (ShiftCountTable) ----------
         for letter, target in day_column_widths.items():
@@ -420,7 +341,7 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
             if current_width is None or current_width < target:
                 sheet.column_dimensions[letter].width = target
 
-        off_col = col_day_start + day_count + 2
+        off_col = max_col + 2
         off_row = 3
 
         dec_title = sheet.cell(row=off_row, column=off_col, value="Tableau de dÃ©compte")
@@ -429,8 +350,8 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
         dec_title.border    = thin_border
         dec_title.font      = Font(bold=True)
 
-        cols = getattr(shift_count_table, "columns", [])
-        export_cols = list(cols) + ["Vacations UIP", "Vacations AIG"]
+        cols = getattr(shift_count_table, "columns", []) or []
+        export_cols = list(cols)
         for ci, nm in enumerate(export_cols):
             ch = sheet.cell(row=off_row+1, column=off_col+ci, value=nm)
             ch.fill      = header_fill
@@ -439,45 +360,13 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
             ch.font      = Font(bold=True)
             letter = get_column_letter(off_col+ci)
             if ci == 0:
-                width = 20
-            elif ci < len(export_cols) - 2:
-                width = 8
+                width = 22
             else:
-                width = 12
+                width = 14
             sheet.column_dimensions[letter].width = width
 
         tree = getattr(shift_count_table, "tree", None)
         items = tree.get_children() if tree is not None else []
-
-        excluded_cells = getattr(gui_instance, "excluded_from_count", set()) or set()
-        special_counts = {}
-        for p_index, post in enumerate(work_posts):
-            post_name = post or ""
-            upper_post = post_name.upper()
-            has_uip = "UIP" in upper_post
-            has_aig = "AIG" in upper_post
-            if not (has_uip or has_aig):
-                continue
-            for shift_offset in range(2):
-                row_idx = p_index * 2 + shift_offset
-                if row_idx >= len(gui_instance.table_entries):
-                    continue
-                row_entries = gui_instance.table_entries[row_idx]
-                for di in range(day_count):
-                    if (row_idx, di) in excluded_cells:
-                        continue
-                    cell = row_entries[di]
-                    if not cell:
-                        continue
-                    name = cell.get().strip()
-                    if not name or name.lower() == "x":
-                        continue
-                    key = name.strip().upper()
-                    counts = special_counts.setdefault(key, {"UIP": 0, "AIG": 0})
-                    if has_uip:
-                        counts["UIP"] += 1
-                    if has_aig:
-                        counts["AIG"] += 1
 
         for i, it in enumerate(items, start=1):
             tags = tree.item(it, 'tags')
@@ -486,9 +375,6 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                 fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
             vals = tree.item(it, 'values') if tree is not None else []
             row_values = list(vals)
-            person_name = str(row_values[0]).strip().upper() if row_values else ""
-            extra_counts = special_counts.get(person_name, {"UIP": 0, "AIG": 0})
-            row_values.extend([extra_counts["UIP"], extra_counts["AIG"]])
             for ci, v in enumerate(row_values):
                 cd = sheet.cell(row=off_row+1+i, column=off_col+ci, value=v)
                 cd.alignment = Alignment(horizontal="center", vertical="center")
@@ -522,34 +408,34 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                 vals = tree.item(it, 'values')
                 if vals:
                     people_set.add(str(vals[0]).strip())
-        for p_index, post in enumerate(work_posts):
-            for di in range(day_count):
-                m = gui_instance.table_entries[p_index*2][di].get().strip()
-                a = gui_instance.table_entries[p_index*2+1][di].get().strip()
-                if m: people_set.add(m)
-                if a: people_set.add(a)
+        for di in range(day_count):
+            if di >= len(gui_instance.table_entries):
+                break
+            row_entries = gui_instance.table_entries[di]
+            for p_index, _post in enumerate(work_posts):
+                if p_index >= len(row_entries):
+                    continue
+                try:
+                    val = row_entries[p_index].get().strip()
+                except Exception:
+                    val = ""
+                if val:
+                    people_set.add(val)
 
-        friday_idx = find_friday_index(days)
-
-        # par personne:
-        # - post_counts: Counter POSTE EXACT -> nb demi-Journées (double vacation compte 2)
-        # - per_day_slots: liste de dicts jour -> {'M': [(post, is_scan), ...], 'A': [...]}
         per_person_post_counts = {p: Counter() for p in people_set}
-        per_person_day         = {p: [dict() for _ in range(day_count)] for p in people_set}
-
-        # Balayage du planning
-        for p_index, post in enumerate(work_posts):
-            is_scan = is_scanner_post(post)
-            for di in range(day_count):
-                m = gui_instance.table_entries[p_index*2][di].get().strip()
-                a = gui_instance.table_entries[p_index*2+1][di].get().strip()
-
-                if m:
-                    per_person_post_counts[m][post] += 1
-                    per_person_day[m][di].setdefault('M', []).append((post, is_scan))
-                if a:
-                    per_person_post_counts[a][post] += 1
-                    per_person_day[a][di].setdefault('A', []).append((post, is_scan))
+        for di in range(day_count):
+            if di >= len(gui_instance.table_entries):
+                break
+            row_entries = gui_instance.table_entries[di]
+            for p_index, post in enumerate(work_posts):
+                if p_index >= len(row_entries):
+                    continue
+                try:
+                    val = row_entries[p_index].get().strip()
+                except Exception:
+                    val = ""
+                if val:
+                    per_person_post_counts[val][post] += 1
 
         row_ptr = stats_start_row + 2
         for person in sorted(people_set, key=lambda s: s):  # ordre alpha
@@ -561,18 +447,12 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
             name_cell.alignment = Alignment(horizontal="center", vertical="center")
             name_cell.border    = thin_border
             name_cell.font      = Font(bold=True)
-            name_row = row_ptr
             row_ptr += 1
 
             # Tableau "par poste exact" dans l'ordre de work_posts
-            dataset = []
-            total_vacs_week = 0
-            first_row_for_pie = row_ptr
             for post in work_posts:
                 n = per_person_post_counts.get(person, Counter()).get(post, 0)
                 if n > 0:
-                    dataset.append((post, n))
-                    total_vacs_week += n
                     lab = sheet.cell(row=row_ptr, column=off_col,   value=post)
                     val = sheet.cell(row=row_ptr, column=off_col+1, value=f"{n} vacs")
                     for c in (lab, val):
@@ -580,82 +460,18 @@ def export_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                         c.border    = thin_border
                     row_ptr += 1
 
-            # Flags
-            vac_vend_aprem   = False
-            double_vacations = False
-            scanner_full_day = False
-
-            for di in range(day_count):
-                slots = per_person_day[person][di]
-                m_list = slots.get('M', [])
-                a_list = slots.get('A', [])
-
-                if di == friday_idx != -1 and len(a_list) >= 1:
-                    vac_vend_aprem = True
-
-                # Double vacations = >= 2 postes dans le mÃªme crÃ©neau (M OU A)
-                if len(m_list) >= 2 or len(a_list) >= 2:
-                    double_vacations = True
-
-                # Scanner toute la Journée = au moins 1 scanner le matin ET au moins 1 scanner l'aprÃ¨s-midi
-                if any(is_scan for _post, is_scan in m_list) and any(is_scan for _post, is_scan in a_list):
-                    scanner_full_day = True
-
-            # Moyenne globale (sur tous les onglets) avec doubles vacations comptÃ©es
+            # Moyenne d'astreintes par mois (basée sur le cumul multi-onglets)
             week_vector = weekly_totals_by_person.get(norm_person(person), [0] * n_weeks)
-            avg_all_weeks = fmt_avg(sum(week_vector), n_weeks)
-
-            indicators = [
-                ("Vac vend  aprem",          "Oui" if vac_vend_aprem   else "Non"),
-                ("double vacations",         "Oui" if double_vacations else "Non"),
-                ("Scanner toute la Journée", "Oui" if scanner_full_day else "Non"),
-                ("Moyenne de vacs par semaine", avg_all_weeks),
-            ]
-            for k, v in indicators:
-                lab = sheet.cell(row=row_ptr, column=off_col,   value=k)
-                val = sheet.cell(row=row_ptr, column=off_col+1, value=v)
-                for c in (lab, val):
-                    c.alignment = Alignment(horizontal="center", vertical="center")
-                    c.border    = thin_border
-                row_ptr += 1
-
-            # -------------------- Graphique â€œpizzaâ€ (par poste exact) --------------------
-            if dataset:
-                # Table (labels, valeurs) Ã  droite pour alimenter le chart
-                data_col_lbl = off_col + 3
-                data_col_val = off_col + 4
-                for i, (post, n) in enumerate(dataset):
-                    sheet.cell(row=first_row_for_pie + i, column=data_col_lbl, value=post)
-                    sheet.cell(row=first_row_for_pie + i, column=data_col_val, value=n)
-
-                cats_ref = Reference(sheet,
-                                     min_col=data_col_lbl, max_col=data_col_lbl,
-                                     min_row=first_row_for_pie, max_row=first_row_for_pie + len(dataset) - 1)
-                vals_ref = Reference(sheet,
-                                     min_col=data_col_val, max_col=data_col_val,
-                                     min_row=first_row_for_pie, max_row=first_row_for_pie + len(dataset) - 1)
-
-                pie = PieChart()
-                pie.add_data(vals_ref, titles_from_data=False)
-                pie.set_categories(cats_ref)
-                pie.title = person  # titre = nom de la personne
-                pie.dataLabels = DataLabelList()
-                pie.dataLabels.showPercent = True  # % sur la pizza
-
-                # Couleurs des parts : couleur du POSTE exact (POST_INFO), fallback gris
-                serie = pie.series[0]
-                serie.data_points = []
-                for i, (post, _n) in enumerate(dataset):
-                    dp = DataPoint(idx=i)
-                    dp.graphicalProperties.solidFill = post_color_map.get(post, "A5A5A5")
-                    serie.data_points.append(dp)
-
-                # Placement
-                anchor_col = off_col + 5
-                anchor_cell = f"{get_column_letter(anchor_col)}{name_row}"
-                pie.width  = 11
-                pie.height = 7
-                sheet.add_chart(pie, anchor_cell)
+            if n_weeks > 0:
+                avg_per_month = round((sum(week_vector) / n_weeks) * 4.0, 1)
+            else:
+                avg_per_month = 0
+            lab = sheet.cell(row=row_ptr, column=off_col,   value="Moyenne d'astreintes / mois")
+            val = sheet.cell(row=row_ptr, column=off_col+1, value=avg_per_month)
+            for c in (lab, val):
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border    = thin_border
+            row_ptr += 1
 
             # Ligne vide entre personnes
             row_ptr += 1
@@ -775,7 +591,8 @@ def export_combined_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                 initials = row[0].get().strip()
             except Exception:
                 initials = ""
-            for di in range(day_count):
+            max_di = min(day_count, len(row) - 4)
+            for di in range(max_di):
                 tpl = row[4 + di]
                 if isinstance(tpl, tuple) and len(tpl) == 3:
                     try:
@@ -969,7 +786,8 @@ def export_combined_to_excel(root, tabs_data, days, work_posts, POST_INFO):
                 ini = row[0].get().strip()
             except Exception:
                 ini = ""
-            for di in range(day_count):
+            max_di = min(day_count, len(row) - 4)
+            for di in range(max_di):
                 tpl = row[4 + di]
                 if isinstance(tpl, tuple) and tpl:
                     try:
