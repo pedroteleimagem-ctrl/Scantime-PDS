@@ -3233,6 +3233,7 @@ def save_status(file_path=None, *, update_caption=True):
         getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None),
         getattr(Assignation, "ENABLE_WEEKEND_BLOCKS", False),
         sorted(getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()) or []),
+        getattr(Assignation, "ENABLE_WEEKDAY_COMPENSATION", False),
         getattr(Assignation, "OPTIMIZE_BALANCE", False),
     )
 
@@ -3632,8 +3633,21 @@ def load_status(file_path: str | None = None):
         Assignation.ENABLE_MAX_WE_DAYS = False
         Assignation.MAX_WE_DAYS_PER_MONTH = None
         weekend_block_posts_loaded = []
+        weekday_comp_loaded = False
         optimize_balance_loaded = False
-        if assignment_len >= 10:
+        if assignment_len >= 11:
+            (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
+             Assignation.ENABLE_MAX_ASSIGNMENTS,
+             Assignation.MAX_ASSIGNMENTS_PER_POST,
+             Assignation.ENABLE_REPOS_SECURITE,
+             loaded_pairs,
+             Assignation.ENABLE_MAX_WE_DAYS,
+             Assignation.MAX_WE_DAYS_PER_MONTH,
+             Assignation.ENABLE_WEEKEND_BLOCKS,
+             weekend_block_posts_loaded,
+             weekday_comp_loaded,
+             optimize_balance_loaded) = assignment_options[:11]
+        elif assignment_len >= 10:
             (Assignation.ENABLE_DIFFERENT_POST_PER_DAY,
              Assignation.ENABLE_MAX_ASSIGNMENTS,
              Assignation.MAX_ASSIGNMENTS_PER_POST,
@@ -3688,6 +3702,7 @@ def load_status(file_path: str | None = None):
         if assignment_len < 8:
             Assignation.ENABLE_WEEKEND_BLOCKS = False
         Assignation.OPTIMIZE_BALANCE = bool(optimize_balance_loaded) if assignment_len >= 10 else False
+        Assignation.ENABLE_WEEKDAY_COMPENSATION = bool(weekday_comp_loaded) if assignment_len >= 11 else False
 
         Assignation.FORBIDDEN_POST_ASSOCIATIONS.clear()
         if loaded_pairs:
@@ -3714,6 +3729,7 @@ def load_status(file_path: str | None = None):
         if Assignation.ENABLE_WEEKEND_BLOCKS and not getattr(Assignation, "WEEKEND_BLOCK_POSTS", set()):
             Assignation.WEEKEND_BLOCK_POSTS = set(work_posts) if Assignation.ENABLE_WEEKEND_BLOCKS else set()
         Assignation.ENABLE_WEEKEND_BLOCKS = bool(getattr(Assignation, "WEEKEND_BLOCK_POSTS", []))
+        weekday_comp_var.set(bool(getattr(Assignation, "ENABLE_WEEKDAY_COMPENSATION", False)))
         optimize_var.set(bool(getattr(Assignation, "OPTIMIZE_BALANCE", False)))
 
         different_post_var.set(Assignation.ENABLE_DIFFERENT_POST_PER_DAY)
@@ -4359,6 +4375,7 @@ if __name__ == '__main__':
     repos_securite_var = tk.BooleanVar(value=Assignation.ENABLE_REPOS_SECURITE)
     max_we_days_enabled_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_MAX_WE_DAYS", False))
     optimize_var = tk.BooleanVar(value=getattr(Assignation, "OPTIMIZE_BALANCE", False))
+    weekday_comp_var = tk.BooleanVar(value=getattr(Assignation, "ENABLE_WEEKDAY_COMPENSATION", False))
     _initial_we_limit = getattr(Assignation, "MAX_WE_DAYS_PER_MONTH", None)
     max_we_days_value_var = tk.IntVar(
         value=_initial_we_limit if _initial_we_limit is not None else 4
@@ -4384,6 +4401,12 @@ if __name__ == '__main__':
 
     def _on_toggle_max_we_days():
         _sync_max_we_menu_state()
+
+    def _on_toggle_weekday_comp():
+        try:
+            Assignation.ENABLE_WEEKDAY_COMPENSATION = bool(weekday_comp_var.get())
+        except Exception:
+            Assignation.ENABLE_WEEKDAY_COMPENSATION = False
 
     def _weekend_block_label():
         try:
@@ -4513,6 +4536,11 @@ if __name__ == '__main__':
     setup_menu.add_command(
         label=_weekend_block_label(),
         command=open_weekend_block_popup,
+    )
+    setup_menu.add_checkbutton(
+        label="Compensation en semaine autour des blocs week-end",
+        variable=weekday_comp_var,
+        command=_on_toggle_weekday_comp,
     )
     setup_menu.add_checkbutton(
         label="Optimisation (rééquilibrage multi-mois)",

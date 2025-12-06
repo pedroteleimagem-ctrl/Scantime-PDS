@@ -26,6 +26,8 @@ ENABLE_MAX_WE_DAYS = False
 MAX_WE_DAYS_PER_MONTH = None
 ENABLE_WEEKEND_BLOCKS = False
 WEEKEND_BLOCK_POSTS: Set[str] = set()
+ENABLE_WEEKDAY_COMPENSATION = False
+WEEKDAY_COMPENSATION_MALUS = 0.8  # penalisation forte mais non bloquante
 OPTIMIZE_BALANCE = False
 OPTIMIZE_BALANCE = False
 
@@ -457,6 +459,99 @@ def assigner_initiales(constraints_app, planning_gui):
     if ENABLE_WEEKEND_BLOCKS and not weekend_block_posts:
         weekend_block_posts = set(work_posts)
 
+    # Fenetres de penalisation (compensation semaine autour d'un bloc WE)
+    weekday_compensation_penalties: Dict[Tuple[int, int], Set[str]] = {}
+
+    def _compensation_windows_for_block(friday_dt):
+        """Retourne les jours (num) lun-jeu de la semaine precedente et suivante pour un vendredi donne."""
+        before = []
+        after = []
+        for offset in range(-4, 0):  # lun-jeu avant le bloc
+            dt = friday_dt + timedelta(days=offset)
+            if dt.month == month and dt.weekday() <= 3:
+                before.append(dt.day)
+        for offset in range(3, 7):  # lun-jeu apres le bloc
+            dt = friday_dt + timedelta(days=offset)
+            if dt.month == month and dt.weekday() <= 3:
+                after.append(dt.day)
+        return before, after
+
+    def _register_compensation_window(post_idx, friday_dt, profile_initial):
+        if not (ENABLE_WEEKDAY_COMPENSATION and friday_dt and profile_initial):
+            return
+        before, after = _compensation_windows_for_block(friday_dt)
+        for d in before + after:
+            weekday_compensation_penalties.setdefault((post_idx, d), set()).add(profile_initial)
+
+    def _block_assigned_initial(post_idx, block_days):
+        """Retourne l'initiale si les 3 jours du bloc sont remplis par le meme profil, sinon None."""
+        if not ENABLE_WEEKDAY_COMPENSATION:
+            return None
+        initial = None
+        for d in block_days:
+            r_idx = day_to_row.get(d)
+            if r_idx is None:
+                return None
+            try:
+                cell = planning_gui.table_entries[r_idx][post_idx]
+            except Exception:
+                return None
+            if not cell:
+                return None
+            try:
+                names = context.name_resolver(cell.get())
+            except Exception:
+                names = []
+            if len(names) != 1:
+                return None
+            if initial is None:
+                initial = names[0]
+            elif initial != names[0]:
+                return None
+        return initial
+
+    def _maybe_register_compensation_for_block(post_idx, block_days):
+        """Inspecte le bloc ven-sam-dim et ajoute la penalisation si le bloc est complet."""
+        if not (ENABLE_WEEKDAY_COMPENSATION and block_days and 0 <= post_idx < len(work_posts)):
+            return
+        try:
+            friday_dt = next(
+                date(year, month, d) for d in block_days
+                if date(year, month, d).weekday() == 4
+            )
+        except Exception:
+            return
+        block_initial = _block_assigned_initial(post_idx, block_days)
+        if block_initial:
+            _register_compensation_window(post_idx, friday_dt, block_initial)
+
+    def _recompute_compensation_from_table():
+        """Recalcule toutes les fenetres de compensation depuis l'etat courant du planning."""
+        weekday_compensation_penalties.clear()
+        if not (ENABLE_WEEKDAY_COMPENSATION and weekend_block_posts):
+            return
+        for post_name in weekend_block_posts:
+            post_idx = post_index_map.get(post_name)
+            if post_idx is None:
+                continue
+            for d in range(1, days_in_month + 1):
+                try:
+                    dt = date(year, month, d)
+                except Exception:
+                    continue
+                if _day_type(dt, hol_month) != "we":
+                    continue
+                block_days = _weekend_block_days(d)
+                # Exiger un vendredi dans le mois courant pour ancrer la compensation
+                if not any(date(year, month, b).weekday() == 4 for b in block_days if 1 <= b <= days_in_month):
+                    continue
+                block_days_in_month = [b for b in block_days if 1 <= b <= days_in_month]
+                if len(block_days_in_month) < 3:
+                    continue
+                block_initial = _block_assigned_initial(post_idx, block_days_in_month)
+                if block_initial:
+                    _maybe_register_compensation_for_block(post_idx, block_days_in_month)
+
     def _update_counts(profile_initial, dtype, day_num):
         if dtype == "we":
             counts_we_days.setdefault(profile_initial, set()).add(day_num)
@@ -482,7 +577,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 result.append(d.day)
         return result
 
-    def _pick_candidate(candidate_entries, dtype):
+    def _pick_candidate(candidate_entries, dtype, day_num=None, post_idx=None):
         """
         Selection equilibree sur ratio count/target pour le type de jour.
         Tie-break : deficit le plus eleve puis un leger alea pour eviter tout biais d'ordre.
@@ -506,6 +601,10 @@ def assigner_initiales(constraints_app, planning_gui):
             effective_ratio = ratio + OVER_PENALTY * over
             if is_pref:
                 effective_ratio = max(0.0, effective_ratio - PREF_BONUS)
+            if ENABLE_WEEKDAY_COMPENSATION and day_num is not None and post_idx is not None:
+                penalized = weekday_compensation_penalties.get((post_idx, day_num))
+                if penalized and p["initial"] in penalized:
+                    effective_ratio += WEEKDAY_COMPENSATION_MALUS
             deficit = tgt - cur
             jitter = random.random()
             scored.append((effective_ratio, deficit, jitter, p))
@@ -570,7 +669,8 @@ def assigner_initiales(constraints_app, planning_gui):
         # Bloc week-end : remplir le m\u00eame poste sur ven/sam/dim du bloc si l'option est activ\u00e9e
         current_post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
         if allow_weekend_block and dtype == "we" and current_post_name in weekend_block_posts:
-            for other_day_num in _weekend_block_days(day_num):
+            block_days = _weekend_block_days(day_num)
+            for other_day_num in block_days:
                 other_r_idx = day_to_row.get(other_day_num)
                 if other_r_idx is None or other_r_idx == r_idx:
                     continue
@@ -592,6 +692,8 @@ def assigner_initiales(constraints_app, planning_gui):
                 if not _is_available(profile, other_r_idx, other_day_num, c_idx, other_post_name, other_dtype, other_weekday_code):
                     continue
                 _assign_profile_to_cell(profile, other_r_idx, c_idx, other_day_num, other_dtype, other_weekday_code, allow_weekend_block=False)
+            if len(block_days) >= 3:
+                _maybe_register_compensation_for_block(c_idx, block_days)
 
         context.clear_caches()
         try:
@@ -627,6 +729,7 @@ def assigner_initiales(constraints_app, planning_gui):
                 continue
             other_weekday_code = WEEKDAY_CODES[other_dt.weekday()]
             block_cells.append((other_r_idx, other_day_num, other_dtype, other_weekday_code))
+        block_day_nums = [b_day for _br, b_day, _bdt, _bc in block_cells]
 
         # 1) Cas où un profil est déjà posé sur au moins un jour du bloc
         existing_profile = None
@@ -654,6 +757,8 @@ def assigner_initiales(constraints_app, planning_gui):
                     continue
                 _assign_profile_to_cell(existing_profile, br_idx, c_idx, b_day, b_dtype, b_code, allow_weekend_block=False)
                 filled = True
+            if filled and len(block_cells) >= 3:
+                _maybe_register_compensation_for_block(c_idx, block_day_nums)
             return filled
 
         # 2) Bloc vide : on cherche un profil disponible sur les 3 jours
@@ -671,7 +776,6 @@ def assigner_initiales(constraints_app, planning_gui):
         chosen = _pick_candidate(candidates, dtype) if candidates else None
         if chosen is None:
             return False
-
         for br_idx, b_day, b_dtype, b_code in block_cells:
             try:
                 cell = planning_gui.table_entries[br_idx][c_idx]
@@ -682,9 +786,41 @@ def assigner_initiales(constraints_app, planning_gui):
             if not _is_available(chosen, br_idx, b_day, c_idx, post_name, b_dtype, b_code):
                 continue
             _assign_profile_to_cell(chosen, br_idx, c_idx, b_day, b_dtype, b_code, allow_weekend_block=False)
+        if len(block_cells) >= 3:
+            _maybe_register_compensation_for_block(c_idx, block_day_nums)
         return True
 
     # Parcours aléatoire des cases pour limiter les biais d'ordre (jour/colonne)
+    _recompute_compensation_from_table()
+
+    block_cases = [
+        (r_idx, c_idx, day_num, dtype, weekday_code)
+        for (r_idx, c_idx, day_num, dtype, weekday_code) in cases
+        if dtype == "we" and (work_posts[c_idx] if c_idx < len(work_posts) else "") in weekend_block_posts
+    ]
+    random.shuffle(block_cases)
+    for (r_idx, c_idx, day_num, dtype, weekday_code) in block_cases:
+        try:
+            current_cell = planning_gui.table_entries[r_idx][c_idx]
+            if not current_cell or current_cell.get().strip():
+                continue
+        except Exception:
+            continue
+        post_name = work_posts[c_idx] if c_idx < len(work_posts) else ""
+        if _assign_weekend_block(r_idx, c_idx, day_num, dtype, weekday_code):
+            continue
+        candidate_entries = []
+        for p in profiles:
+            if not _is_available(p, r_idx, day_num, c_idx, post_name, dtype, weekday_code):
+                continue
+            candidate_entries.append((p, post_name in p.get("preferred", [])))
+        random.shuffle(candidate_entries)
+        chosen = _pick_candidate(candidate_entries, dtype, day_num=day_num, post_idx=c_idx)
+        if chosen:
+            _assign_profile_to_cell(chosen, r_idx, c_idx, day_num, dtype, weekday_code)
+
+    _recompute_compensation_from_table()
+
     random.shuffle(cases)
 
     for (r_idx, c_idx, day_num, dtype, weekday_code) in cases:
@@ -709,7 +845,7 @@ def assigner_initiales(constraints_app, planning_gui):
 
         random.shuffle(candidate_entries)  # melange a chaque case pour casser les biais d'ordre
 
-        chosen = _pick_candidate(candidate_entries, dtype)
+        chosen = _pick_candidate(candidate_entries, dtype, day_num=day_num, post_idx=c_idx)
 
         if chosen is None:
             continue
